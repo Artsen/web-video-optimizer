@@ -1,5 +1,5 @@
 import type { JobDto } from "@local-video-optimizer/contracts";
-import type { JobEntity } from "../runtime/api-runtime.js";
+import type { JobEntity } from "../entities/job-entity.js";
 
 export function toJobDto(job: JobEntity): JobDto {
   return {

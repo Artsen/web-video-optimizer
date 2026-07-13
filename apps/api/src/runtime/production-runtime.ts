@@ -21,29 +21,41 @@ import type { ApiConfig } from "../config.js";
 import { toHistorySnapshotDto } from "../dto/history-dto.js";
 import { toJobDto } from "../dto/job-dto.js";
 import { toVideoRecordDto } from "../dto/video-dto.js";
-import type { ApiRuntime, JobEntity, UploadedVideoFile, VideoEntity } from "./api-runtime.js";
+import type { JobEntity } from "../entities/job-entity.js";
+import type { ManifestSnapshot } from "../entities/manifest.js";
+import type { VideoEntity } from "../entities/video-entity.js";
+import { FileManifestStore } from "../persistence/file-manifest-store.js";
+import type { ManifestStore } from "../persistence/manifest-store.js";
+import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
+import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
+import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
+import type { ApiRuntime, UploadedVideoFile } from "./api-runtime.js";
 
 const mkdir = promisify(fs.mkdir);
 const rm = promisify(fs.rm);
 const stat = promisify(fs.stat);
 
-let config: ApiConfig;
-let uploadDir: string;
-let outputDir: string;
-let tmpDir: string;
-let manifestPath: string;
-
 type VideoRecord = VideoEntity;
 type Job = JobEntity;
 
-type Manifest = {
-  videos: VideoRecord[];
-  jobs: Job[];
+type ProcessHandle = ReturnType<typeof spawn>;
+
+type RuntimeContext = {
+  config: ApiConfig;
+  uploadDir: string;
+  outputDir: string;
+  tmpDir: string;
+  videoRepository: VideoRepository;
+  jobRepository: JobRepository;
+  manifestStore: ManifestStore;
+  processes: Map<string, ProcessHandle>;
 };
 
-const videos = new Map<string, VideoRecord>();
-const jobs = new Map<string, Job>();
-const processes = new Map<string, ReturnType<typeof spawn>>();
+export type ProductionRuntimeDependencies = {
+  videoRepository?: VideoRepository;
+  jobRepository?: JobRepository;
+  manifestStore?: ManifestStore;
+};
 
 async function fileHash(filePath: string): Promise<string> {
   const hash = createHash("sha256");
@@ -61,21 +73,21 @@ async function removeJobArtifacts(job: Job): Promise<void> {
   if (job.sidecarPath) await rm(job.sidecarPath, { force: true, maxRetries: 5, retryDelay: 150 });
 }
 
-async function removeJob(job: Job): Promise<void> {
-  processes.get(job.id)?.kill("SIGTERM");
-  processes.delete(job.id);
+async function removeJob(ctx: RuntimeContext, job: Job): Promise<void> {
+  ctx.processes.get(job.id)?.kill("SIGTERM");
+  ctx.processes.delete(job.id);
   await removeJobArtifacts(job);
-  jobs.delete(job.id);
+  ctx.jobRepository.delete(job.id);
 }
 
-async function removeVideoRecord(video: VideoRecord): Promise<void> {
+async function removeVideoRecord(ctx: RuntimeContext, video: VideoRecord): Promise<void> {
   await rm(video.storedPath, { force: true, maxRetries: 5, retryDelay: 150 });
-  for (const job of Array.from(jobs.values())) {
+  for (const job of ctx.jobRepository.findByVideoId(video.id)) {
     if (job.videoId === video.id) {
-      await removeJob(job);
+      await removeJob(ctx, job);
     }
   }
-  videos.delete(video.id);
+  ctx.videoRepository.delete(video.id);
 }
 
 async function pruneDirectory(directory: string, keepPaths: Set<string>): Promise<void> {
@@ -90,27 +102,28 @@ async function pruneDirectory(directory: string, keepPaths: Set<string>): Promis
   );
 }
 
-async function pruneOrphanFiles(): Promise<void> {
-  const uploadKeep = new Set(Array.from(videos.values()).map((video) => path.resolve(video.storedPath)));
+async function pruneOrphanFiles(ctx: RuntimeContext): Promise<void> {
+  const uploadKeep = new Set(ctx.videoRepository.getAll().map((video) => path.resolve(video.storedPath)));
   const outputKeep = new Set<string>();
-  for (const job of jobs.values()) {
+  for (const job of ctx.jobRepository.getAll()) {
     if (job.outputPath) outputKeep.add(path.resolve(job.outputPath));
     if (job.sidecarPath) outputKeep.add(path.resolve(job.sidecarPath));
   }
   await Promise.all([
-    pruneDirectory(uploadDir, uploadKeep),
-    pruneDirectory(outputDir, outputKeep),
-    pruneDirectory(tmpDir, new Set())
+    pruneDirectory(ctx.uploadDir, uploadKeep),
+    pruneDirectory(ctx.outputDir, outputKeep),
+    pruneDirectory(ctx.tmpDir, new Set())
   ]);
 }
 
 async function createVideoRecordFromFile(
+  ctx: RuntimeContext,
   filePath: string,
   originalName: string,
   uploadedAt = new Date().toISOString()
 ): Promise<VideoRecord> {
   const sourceHash = await fileHash(filePath);
-  const existing = Array.from(videos.values()).find((video) => video.sourceHash === sourceHash);
+  const existing = ctx.videoRepository.findBySourceHash(sourceHash);
   if (existing) {
     await rm(filePath, { force: true, maxRetries: 5, retryDelay: 150 });
     return existing;
@@ -118,7 +131,7 @@ async function createVideoRecordFromFile(
 
   const id = nanoid();
   const extension = path.extname(originalName) || path.extname(filePath) || ".mp4";
-  const storedPath = path.join(uploadDir, `${id}${extension}`);
+  const storedPath = path.join(ctx.uploadDir, `${id}${extension}`);
   await fs.promises.rename(filePath, storedPath);
 
   const probe = await ffprobe(storedPath);
@@ -130,19 +143,19 @@ async function createVideoRecordFromFile(
     sourceHash,
     metadata: normalizeProbe(originalName, probe)
   };
-  videos.set(id, record);
-  await saveManifest();
+  ctx.videoRepository.set(record);
+  await saveManifest(ctx);
   return record;
 }
 
-async function downloadVideoFromUrl(url: string): Promise<VideoRecord> {
-  const ytDlpCommand = await resolveYtDlpCommand();
+async function downloadVideoFromUrl(ctx: RuntimeContext, url: string): Promise<VideoRecord> {
+  const ytDlpCommand = await resolveYtDlpCommand(ctx.config);
   if (!ytDlpCommand) {
     throw new Error("yt-dlp was not found. Install yt-dlp or set YT_DLP_BIN to enable URL imports.");
   }
 
   const importId = nanoid();
-  const downloadDir = path.join(tmpDir, `url-import-${importId}`);
+  const downloadDir = path.join(ctx.tmpDir, `url-import-${importId}`);
   await mkdir(downloadDir, { recursive: true });
   const outputTemplate = path.join(downloadDir, "%(title).180B-%(id)s.%(ext)s");
 
@@ -155,7 +168,7 @@ async function downloadVideoFromUrl(url: string): Promise<VideoRecord> {
           "--restrict-filenames",
           "--windows-filenames",
           "--newline",
-          ...ytDlpJsRuntimeArgs(),
+          ...ytDlpJsRuntimeArgs(ctx.config),
           "-f",
           "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
           "--merge-output-format",
@@ -198,15 +211,15 @@ async function downloadVideoFromUrl(url: string): Promise<VideoRecord> {
     throw new Error("yt-dlp did not create a downloadable video file.");
   }
 
-  const importPath = path.join(tmpDir, `${importId}-${path.basename(videoFile)}`);
+  const importPath = path.join(ctx.tmpDir, `${importId}-${path.basename(videoFile)}`);
   await fs.promises.rename(videoFile, importPath);
   await rm(downloadDir, { recursive: true, force: true });
-  return createVideoRecordFromFile(importPath, path.basename(importPath));
+  return createVideoRecordFromFile(ctx, importPath, path.basename(importPath));
 }
 
-async function mergeDuplicateVideos(): Promise<void> {
+async function mergeDuplicateVideos(ctx: RuntimeContext): Promise<void> {
   const byHash = new Map<string, VideoRecord>();
-  for (const video of Array.from(videos.values()).sort((a, b) => a.uploadedAt.localeCompare(b.uploadedAt))) {
+  for (const video of ctx.videoRepository.getAll().sort((a, b) => a.uploadedAt.localeCompare(b.uploadedAt))) {
     if (!video.sourceHash) continue;
     const keeper = byHash.get(video.sourceHash);
     if (!keeper) {
@@ -214,20 +227,21 @@ async function mergeDuplicateVideos(): Promise<void> {
       continue;
     }
 
-    for (const job of jobs.values()) {
+    for (const job of ctx.jobRepository.getAll()) {
       if (job.videoId === video.id) {
         job.videoId = keeper.id;
       }
     }
     await rm(video.storedPath, { force: true, maxRetries: 5, retryDelay: 150 });
-    videos.delete(video.id);
+    ctx.videoRepository.delete(video.id);
   }
 }
 
-async function saveManifest(): Promise<void> {
-  const manifest: Manifest = {
-    videos: Array.from(videos.values()),
-    jobs: Array.from(jobs.values())
+async function saveManifest(ctx: RuntimeContext): Promise<void> {
+  const manifest: ManifestSnapshot = {
+    videos: ctx.videoRepository.getAll(),
+    jobs: ctx.jobRepository
+      .getAll()
       .filter((job) => job.status !== "canceled")
       .map((job) => ({
         ...job,
@@ -236,37 +250,31 @@ async function saveManifest(): Promise<void> {
       }))
   };
 
-  await fs.promises.writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  await ctx.manifestStore.save(manifest);
 }
 
-async function loadManifest(): Promise<void> {
-  try {
-    const raw = await fs.promises.readFile(manifestPath, "utf8");
-    const manifest = JSON.parse(raw) as Manifest;
+async function loadManifest(ctx: RuntimeContext): Promise<void> {
+  const manifest = await ctx.manifestStore.load();
+  if (!manifest) return;
 
-    for (const video of manifest.videos ?? []) {
-      if (fs.existsSync(video.storedPath)) {
-        videos.set(video.id, {
-          ...video,
-          sourceHash: video.sourceHash ?? (await fileHash(video.storedPath))
-        });
-      }
+  for (const video of manifest.videos ?? []) {
+    if (fs.existsSync(video.storedPath)) {
+      ctx.videoRepository.set({
+        ...video,
+        sourceHash: video.sourceHash ?? (await fileHash(video.storedPath))
+      });
     }
+  }
 
-    for (const job of manifest.jobs ?? []) {
-      if (job.status === "canceled" || job.status === "running" || job.status === "queued") continue;
-      const restored: Job = {
-        ...job,
-        status: job.status,
-        message: job.message
-      };
-      if (!restored.outputPath || fs.existsSync(restored.outputPath)) {
-        jobs.set(restored.id, restored);
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      console.warn("Unable to load manifest:", error);
+  for (const job of manifest.jobs ?? []) {
+    if (job.status === "canceled" || job.status === "running" || job.status === "queued") continue;
+    const restored: Job = {
+      ...job,
+      status: job.status,
+      message: job.message
+    };
+    if (!restored.outputPath || fs.existsSync(restored.outputPath)) {
+      ctx.jobRepository.set(restored);
     }
   }
 }
@@ -346,14 +354,14 @@ async function commandExists(command: string, args = ["--help"]): Promise<boolea
   });
 }
 
-async function speechCapabilities(): Promise<{
+async function speechCapabilities(config: ApiConfig): Promise<{
   whisperCpp: boolean;
   whisperModel: boolean;
   whisperCommand?: string;
   whisperModelPath?: string;
 }> {
   const configuredModel = config.whisperCppModel;
-  const whisperCommand = await resolveWhisperCommand();
+  const whisperCommand = await resolveWhisperCommand(config);
 
   return {
     whisperCpp: Boolean(whisperCommand),
@@ -363,16 +371,18 @@ async function speechCapabilities(): Promise<{
   };
 }
 
-async function downloaderCapabilities(): Promise<{ ytDlp: boolean; ytDlpCommand?: string; ytDlpJsRuntime?: string }> {
-  const ytDlpCommand = await resolveYtDlpCommand();
+async function downloaderCapabilities(
+  config: ApiConfig
+): Promise<{ ytDlp: boolean; ytDlpCommand?: string; ytDlpJsRuntime?: string }> {
+  const ytDlpCommand = await resolveYtDlpCommand(config);
   return {
     ytDlp: Boolean(ytDlpCommand),
     ytDlpCommand,
-    ytDlpJsRuntime: ytDlpJsRuntimeValue()
+    ytDlpJsRuntime: ytDlpJsRuntimeValue(config)
   };
 }
 
-async function resolveWhisperCommand(): Promise<string | undefined> {
+async function resolveWhisperCommand(config: ApiConfig): Promise<string | undefined> {
   const configuredCommand = config.whisperCppBin;
   const candidates = configuredCommand ? [configuredCommand] : ["whisper-cli", "main", "whisper-cpp"];
   for (const candidate of candidates) {
@@ -381,7 +391,7 @@ async function resolveWhisperCommand(): Promise<string | undefined> {
   return undefined;
 }
 
-async function resolveYtDlpCommand(): Promise<string | undefined> {
+async function resolveYtDlpCommand(config: ApiConfig): Promise<string | undefined> {
   const configuredCommand = config.ytDlpBin;
   const candidates = configuredCommand ? [stripWrappingQuotes(configuredCommand)] : ["yt-dlp", "yt-dlp.exe"];
   for (const candidate of candidates) {
@@ -394,12 +404,12 @@ function stripWrappingQuotes(value: string): string {
   return value.replace(/^"|"$/g, "");
 }
 
-function ytDlpJsRuntimeValue(): string {
+function ytDlpJsRuntimeValue(config: ApiConfig): string {
   return stripWrappingQuotes(config.ytDlpJsRuntime);
 }
 
-function ytDlpJsRuntimeArgs(): string[] {
-  return ["--js-runtimes", ytDlpJsRuntimeValue()];
+function ytDlpJsRuntimeArgs(config: ApiConfig): string[] {
+  return ["--js-runtimes", ytDlpJsRuntimeValue(config)];
 }
 
 function publicJob(job: Job): JobDto {
@@ -441,8 +451,8 @@ function revealInFileManager(filePath: string): Promise<void> {
   });
 }
 
-function historySnapshot() {
-  return toHistorySnapshotDto(Array.from(videos.values()), Array.from(jobs.values()));
+function historySnapshot(ctx: RuntimeContext) {
+  return toHistorySnapshotDto(ctx.videoRepository.getAll(), ctx.jobRepository.getAll());
 }
 
 function commandPreview(args: string[]): string {
@@ -579,12 +589,18 @@ function cleanCaptionText(text: string): string {
     .replace(/\n{3,}/g, "\n\n");
 }
 
-function createEncodeJob(video: VideoRecord, settings: OptimizationSettings, kind: JobKind, suffix = "optimized"): Job {
+function createEncodeJob(
+  ctx: RuntimeContext,
+  video: VideoRecord,
+  settings: OptimizationSettings,
+  kind: JobKind,
+  suffix = "optimized"
+): Job {
   const jobId = nanoid();
   const baseName = sanitizeFileName(settings.outputFilename || `${path.parse(video.originalName).name}-${suffix}`);
   const extension = settings.outputContainer === "webm" ? ".webm" : ".mp4";
   const outputFileName = `${baseName}${extension}`;
-  const outputPath = path.join(outputDir, `${jobId}-${outputFileName}`);
+  const outputPath = path.join(ctx.outputDir, `${jobId}-${outputFileName}`);
   const args = buildFfmpegArgs(video.storedPath, outputPath, settings);
   const job: Job = {
     id: jobId,
@@ -599,8 +615,8 @@ function createEncodeJob(video: VideoRecord, settings: OptimizationSettings, kin
     settings
   };
 
-  jobs.set(jobId, job);
-  void saveManifest();
+  ctx.jobRepository.set(job);
+  void saveManifest(ctx);
   return job;
 }
 
@@ -608,23 +624,30 @@ function matchingSettings(a: OptimizationSettings, b: OptimizationSettings): boo
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
-function reusableJob(video: VideoRecord, kind: Job["kind"], settings: OptimizationSettings): Job | undefined {
-  return Array.from(jobs.values()).find(
-    (job) =>
-      job.videoId === video.id &&
-      job.kind === kind &&
-      (job.status === "queued" || job.status === "running" || job.status === "completed") &&
-      matchingSettings(job.settings, settings) &&
-      (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
-  );
+function reusableJob(
+  ctx: RuntimeContext,
+  video: VideoRecord,
+  kind: Job["kind"],
+  settings: OptimizationSettings
+): Job | undefined {
+  return ctx.jobRepository
+    .getAll()
+    .find(
+      (job) =>
+        job.videoId === video.id &&
+        job.kind === kind &&
+        (job.status === "queued" || job.status === "running" || job.status === "completed") &&
+        matchingSettings(job.settings, settings) &&
+        (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
+    );
 }
 
-function createSubtitleJob(video: VideoRecord): Job {
+function createSubtitleJob(ctx: RuntimeContext, video: VideoRecord): Job {
   const jobId = nanoid();
   const baseName = sanitizeFileName(`${path.parse(video.originalName).name}-captions`);
   const outputFileName = `${baseName}.vtt`;
   const sidecarFileName = `${baseName}.srt`;
-  const outputBasePath = path.join(outputDir, `${jobId}-${baseName}`);
+  const outputBasePath = path.join(ctx.outputDir, `${jobId}-${baseName}`);
   const outputPath = `${outputBasePath}.vtt`;
   const sidecarPath = `${outputBasePath}.srt`;
   const settings = normalizeOptimizationSettings({ outputFilename: baseName });
@@ -643,8 +666,8 @@ function createSubtitleJob(video: VideoRecord): Job {
     settings
   };
 
-  jobs.set(jobId, job);
-  void saveManifest();
+  ctx.jobRepository.set(job);
+  void saveManifest(ctx);
   return job;
 }
 
@@ -687,13 +710,13 @@ function detectLeadingSilence(inputPath: string): Promise<number> {
   });
 }
 
-function createMuxJob(video: VideoRecord, videoJob: Job, subtitleJob: Job): Job {
+function createMuxJob(ctx: RuntimeContext, video: VideoRecord, videoJob: Job, subtitleJob: Job): Job {
   const jobId = nanoid();
   const parsed = path.parse(videoJob.outputFileName ?? video.originalName);
   const extension = parsed.ext || (videoJob.settings.outputContainer === "webm" ? ".webm" : ".mp4");
   const baseName = sanitizeFileName(`${parsed.name || path.parse(video.originalName).name}-captioned`);
   const outputFileName = `${baseName}${extension}`;
-  const outputPath = path.join(outputDir, `${jobId}-${outputFileName}`);
+  const outputPath = path.join(ctx.outputDir, `${jobId}-${outputFileName}`);
   const settings = normalizeOptimizationSettings({ ...videoJob.settings, outputFilename: baseName });
   const args = buildMuxSubtitleArgs(
     videoJob.outputPath!,
@@ -714,8 +737,8 @@ function createMuxJob(video: VideoRecord, videoJob: Job, subtitleJob: Job): Job 
     settings
   };
 
-  jobs.set(jobId, job);
-  void saveManifest();
+  ctx.jobRepository.set(job);
+  void saveManifest(ctx);
   return job;
 }
 
@@ -733,7 +756,7 @@ function buildMuxSubtitleArgs(
   return args;
 }
 
-function runMuxJob(job: Job, videoJob: Job, subtitleJob: Job): void {
+function runMuxJob(ctx: RuntimeContext, job: Job, videoJob: Job, subtitleJob: Job): void {
   const args = [
     "-progress",
     "pipe:1",
@@ -746,14 +769,14 @@ function runMuxJob(job: Job, videoJob: Job, subtitleJob: Job): void {
     )
   ];
   const child = spawn("ffmpeg", args, { windowsHide: true });
-  processes.set(job.id, child);
+  ctx.processes.set(job.id, child);
   job.status = "running";
   job.message = "Embedding subtitle track";
 
   child.stdout.on("data", (chunk) => {
     const text = String(chunk);
     const outTimeMs = text.match(/out_time_ms=(\d+)/);
-    const sourceDuration = videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
+    const sourceDuration = ctx.videoRepository.get(job.videoId)?.metadata.durationSeconds ?? 0;
     if (outTimeMs && sourceDuration > 0) {
       const elapsed = Number(outTimeMs[1]) / 1_000_000;
       job.progress = Math.min(99, Math.round((elapsed / sourceDuration) * 100));
@@ -772,25 +795,25 @@ function runMuxJob(job: Job, videoJob: Job, subtitleJob: Job): void {
     job.status = "failed";
     job.message = error.message;
     job.completedAt = new Date().toISOString();
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     void removeJobArtifacts(job);
-    void saveManifest();
+    void saveManifest(ctx);
   });
 
   child.on("close", async (code) => {
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     job.completedAt = new Date().toISOString();
     if (job.status === "canceled") {
       job.progress = 0;
       job.message = "Canceled";
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
     if (code !== 0) {
       job.status = "failed";
       job.message = `FFmpeg exited with code ${code}`;
       await removeJobArtifacts(job);
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
 
@@ -798,14 +821,14 @@ function runMuxJob(job: Job, videoJob: Job, subtitleJob: Job): void {
     job.progress = 100;
     job.message = "Captions embedded";
     job.outputSize = (await stat(job.outputPath!)).size;
-    void saveManifest();
+    void saveManifest(ctx);
   });
 }
 
-async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
-  const whisperCommand = await resolveWhisperCommand();
-  const whisperModel = config.whisperCppModel;
-  const audioPath = path.join(tmpDir, `${job.id}-subtitle.wav`);
+async function runSubtitleJob(ctx: RuntimeContext, job: Job, inputPath: string): Promise<void> {
+  const whisperCommand = await resolveWhisperCommand(ctx.config);
+  const whisperModel = ctx.config.whisperCppModel;
+  const audioPath = path.join(ctx.tmpDir, `${job.id}-subtitle.wav`);
   const outputBasePath = job.outputPath!.replace(/\.vtt$/i, "");
 
   job.status = "running";
@@ -817,7 +840,7 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
     job.message = "whisper.cpp executable was not found. Set WHISPER_CPP_BIN or add whisper-cli to PATH.";
     job.completedAt = new Date().toISOString();
     void removeJobArtifacts(job);
-    void saveManifest();
+    void saveManifest(ctx);
     return;
   }
 
@@ -826,16 +849,16 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
     job.message = "WHISPER_CPP_MODEL is not configured";
     job.completedAt = new Date().toISOString();
     void removeJobArtifacts(job);
-    void saveManifest();
+    void saveManifest(ctx);
     return;
   }
 
   const leadingSilenceSeconds = await detectLeadingSilence(inputPath);
-  if (jobs.get(job.id)?.status === "canceled") {
+  if (ctx.jobRepository.get(job.id)?.status === "canceled") {
     job.progress = 0;
     job.message = "Canceled";
     job.completedAt = new Date().toISOString();
-    void saveManifest();
+    void saveManifest(ctx);
     return;
   }
   const extractArgs = [
@@ -860,41 +883,41 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
       ? `Detected ${leadingSilenceSeconds.toFixed(2)}s leading silence`
       : "Extracting audio for subtitles";
   job.ffmpegCommand = `${commandPreview(extractArgs)} && ${[whisperCommand, ...whisperArgs].map((part) => (part.includes(" ") ? `"${part}"` : part)).join(" ")}`;
-  void saveManifest();
+  void saveManifest(ctx);
 
   const extractor = spawn("ffmpeg", extractArgs, { windowsHide: true });
-  processes.set(job.id, extractor);
+  ctx.processes.set(job.id, extractor);
 
   extractor.on("error", (error) => {
     job.status = "failed";
     job.message = error.message;
     job.completedAt = new Date().toISOString();
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     void removeJobArtifacts(job);
-    void saveManifest();
+    void saveManifest(ctx);
   });
 
   extractor.on("close", (code) => {
     if (job.status === "canceled") {
-      processes.delete(job.id);
+      ctx.processes.delete(job.id);
       void fs.promises.rm(audioPath, { force: true });
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
     if (code !== 0) {
       job.status = "failed";
       job.message = `Audio extraction exited with code ${code}`;
       job.completedAt = new Date().toISOString();
-      processes.delete(job.id);
+      ctx.processes.delete(job.id);
       void removeJobArtifacts(job);
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
 
     job.progress = 35;
     job.message = "Transcribing speech with whisper.cpp";
     const whisper = spawn(whisperCommand, whisperArgs, { windowsHide: true });
-    processes.set(job.id, whisper);
+    ctx.processes.set(job.id, whisper);
 
     whisper.stderr.on("data", (chunk) => {
       const text = String(chunk).trim();
@@ -907,34 +930,34 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
       job.status = "failed";
       job.message = error.message;
       job.completedAt = new Date().toISOString();
-      processes.delete(job.id);
+      ctx.processes.delete(job.id);
       void fs.promises.rm(audioPath, { force: true });
       void removeJobArtifacts(job);
-      void saveManifest();
+      void saveManifest(ctx);
     });
 
     whisper.on("close", async (whisperCode) => {
-      processes.delete(job.id);
+      ctx.processes.delete(job.id);
       await fs.promises.rm(audioPath, { force: true });
       job.completedAt = new Date().toISOString();
       if (job.status === "canceled") {
         job.progress = 0;
         job.message = "Canceled";
-        void saveManifest();
+        void saveManifest(ctx);
         return;
       }
       if (whisperCode !== 0) {
         job.status = "failed";
         job.message = `whisper.cpp exited with code ${whisperCode}`;
         await removeJobArtifacts(job);
-        void saveManifest();
+        void saveManifest(ctx);
         return;
       }
       if (!fs.existsSync(job.outputPath!)) {
         job.status = "failed";
         job.message = "whisper.cpp did not create a VTT file";
         await removeJobArtifacts(job);
-        void saveManifest();
+        void saveManifest(ctx);
         return;
       }
 
@@ -954,12 +977,12 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
           ? `Subtitles generated with ${leadingSilenceSeconds.toFixed(2)}s leading-silence compensation`
           : "Subtitles generated";
       job.outputSize = (await stat(job.outputPath!)).size;
-      void saveManifest();
+      void saveManifest(ctx);
     });
   });
 }
 
-function runPosterJob(job: Job, inputPath: string, atSeconds: number): void {
+function runPosterJob(ctx: RuntimeContext, job: Job, inputPath: string, atSeconds: number): void {
   const args = [
     "-y",
     "-ss",
@@ -975,7 +998,7 @@ function runPosterJob(job: Job, inputPath: string, atSeconds: number): void {
     job.outputPath!
   ];
   const child = spawn("ffmpeg", args, { windowsHide: true });
-  processes.set(job.id, child);
+  ctx.processes.set(job.id, child);
   job.status = "running";
   job.message = "Generating poster";
   job.ffmpegCommand = commandPreview(args);
@@ -984,35 +1007,35 @@ function runPosterJob(job: Job, inputPath: string, atSeconds: number): void {
     job.status = "failed";
     job.message = error.message;
     job.completedAt = new Date().toISOString();
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     void removeJobArtifacts(job);
-    void saveManifest();
+    void saveManifest(ctx);
   });
 
   child.on("close", async (code) => {
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     job.completedAt = new Date().toISOString();
     if (job.status === "canceled") {
       job.message = "Canceled";
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
     if (code !== 0) {
       job.status = "failed";
       job.message = `FFmpeg exited with code ${code}`;
       await removeJobArtifacts(job);
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
     job.status = "completed";
     job.progress = 100;
     job.message = "Poster generated";
     job.outputSize = (await stat(job.outputPath!)).size;
-    void saveManifest();
+    void saveManifest(ctx);
   });
 }
 
-function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): void {
+function runJob(ctx: RuntimeContext, job: Job, inputPath: string, durationLimitSeconds?: number): void {
   const args = [
     "-progress",
     "pipe:1",
@@ -1020,7 +1043,7 @@ function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): voi
     ...buildFfmpegArgs(inputPath, job.outputPath!, job.settings, durationLimitSeconds)
   ];
   const child = spawn("ffmpeg", args, { windowsHide: true });
-  processes.set(job.id, child);
+  ctx.processes.set(job.id, child);
 
   job.status = "running";
   job.message = "Encoding started";
@@ -1028,7 +1051,7 @@ function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): voi
   child.stdout.on("data", (chunk) => {
     const text = String(chunk);
     const outTimeMs = text.match(/out_time_ms=(\d+)/);
-    const sourceDuration = durationLimitSeconds ?? videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
+    const sourceDuration = durationLimitSeconds ?? ctx.videoRepository.get(job.videoId)?.metadata.durationSeconds ?? 0;
 
     if (outTimeMs && sourceDuration > 0) {
       const elapsed = Number(outTimeMs[1]) / 1_000_000;
@@ -1048,25 +1071,25 @@ function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): voi
     job.status = "failed";
     job.message = error.message;
     job.completedAt = new Date().toISOString();
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     void removeJobArtifacts(job);
-    void saveManifest();
+    void saveManifest(ctx);
   });
 
   child.on("close", async (code) => {
-    processes.delete(job.id);
+    ctx.processes.delete(job.id);
     job.completedAt = new Date().toISOString();
     if (job.status === "canceled") {
       job.progress = 0;
       job.message = "Canceled";
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
     if (code !== 0) {
       job.status = "failed";
       job.message = `FFmpeg exited with code ${code}`;
       await removeJobArtifacts(job);
-      void saveManifest();
+      void saveManifest(ctx);
       return;
     }
 
@@ -1075,76 +1098,88 @@ function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): voi
     job.message = "Encoding complete";
     job.outputSize = (await stat(job.outputPath!)).size;
     if (job.kind === "sample" && durationLimitSeconds) {
-      const duration = videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
+      const duration = ctx.videoRepository.get(job.videoId)?.metadata.durationSeconds ?? 0;
       const estimatedFullSize =
         duration > 0 ? Math.round((job.outputSize * duration) / durationLimitSeconds) : job.outputSize;
-      const originalSize = videos.get(job.videoId)?.metadata.fileSize;
+      const originalSize = ctx.videoRepository.get(job.videoId)?.metadata.fileSize;
       job.sampleEstimate = {
         sampleSeconds: durationLimitSeconds,
         estimatedFullSize,
         estimatedReduction: originalSize ? Math.round((1 - estimatedFullSize / originalSize) * 100) : undefined
       };
     }
-    void saveManifest();
+    void saveManifest(ctx);
   });
 }
 
-export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
-  config = apiConfig;
-  uploadDir = config.uploadDir;
-  outputDir = config.outputDir;
-  tmpDir = config.tmpDir;
-  manifestPath = config.manifestPath;
+export function createProductionRuntime(
+  apiConfig: ApiConfig,
+  dependencies: ProductionRuntimeDependencies = {}
+): ApiRuntime {
+  const ctx: RuntimeContext = {
+    config: apiConfig,
+    uploadDir: apiConfig.uploadDir,
+    outputDir: apiConfig.outputDir,
+    tmpDir: apiConfig.tmpDir,
+    videoRepository: dependencies.videoRepository ?? new InMemoryVideoRepository(),
+    jobRepository: dependencies.jobRepository ?? new InMemoryJobRepository(),
+    manifestStore: dependencies.manifestStore ?? new FileManifestStore(apiConfig.manifestPath),
+    processes: new Map()
+  };
 
   return {
     async initialize() {
-      videos.clear();
-      jobs.clear();
-      processes.clear();
+      ctx.videoRepository.clear();
+      ctx.jobRepository.clear();
+      ctx.processes.clear();
       await Promise.all([
-        mkdir(uploadDir, { recursive: true }),
-        mkdir(outputDir, { recursive: true }),
-        mkdir(tmpDir, { recursive: true })
+        mkdir(ctx.uploadDir, { recursive: true }),
+        mkdir(ctx.outputDir, { recursive: true }),
+        mkdir(ctx.tmpDir, { recursive: true })
       ]);
-      await loadManifest();
-      await mergeDuplicateVideos();
-      await pruneOrphanFiles();
-      await saveManifest();
+      await loadManifest(ctx);
+      await mergeDuplicateVideos(ctx);
+      await pruneOrphanFiles(ctx);
+      await saveManifest(ctx);
     },
     async getCapabilities() {
-      return { ...(await ffmpegCapabilities()), ...(await speechCapabilities()), ...(await downloaderCapabilities()) };
+      return {
+        ...(await ffmpegCapabilities()),
+        ...(await speechCapabilities(ctx.config)),
+        ...(await downloaderCapabilities(ctx.config))
+      };
     },
     getHistory() {
-      return historySnapshot();
+      return historySnapshot(ctx);
     },
     async createVideoFromUpload(file: UploadedVideoFile) {
       if (!file.path) {
         throw new Error("Uploaded file path is required");
       }
-      return toVideoRecordDto(await createVideoRecordFromFile(file.path, file.originalName));
+      return toVideoRecordDto(await createVideoRecordFromFile(ctx, file.path, file.originalName));
     },
     async createVideoFromUrl(url: string) {
-      return toVideoRecordDto(await downloadVideoFromUrl(url));
+      return toVideoRecordDto(await downloadVideoFromUrl(ctx, url));
     },
     getVideo(id: string) {
-      const video = videos.get(id);
+      const video = ctx.videoRepository.get(id);
       return video ? toVideoRecordDto(video) : undefined;
     },
     getVideoMetadata(id: string) {
-      return videos.get(id)?.metadata;
+      return ctx.videoRepository.get(id)?.metadata;
     },
     getVideoSource(id: string) {
-      const video = videos.get(id);
+      const video = ctx.videoRepository.get(id);
       return video ? { filePath: video.storedPath, fileName: video.originalName } : undefined;
     },
     getVideoDownload(id: string) {
-      const video = videos.get(id);
+      const video = ctx.videoRepository.get(id);
       return video && fs.existsSync(video.storedPath)
         ? { filePath: video.storedPath, fileName: video.originalName }
         : undefined;
     },
     async renameVideo(id: string, originalName: string) {
-      const video = videos.get(id);
+      const video = ctx.videoRepository.get(id);
       if (!video) return undefined;
       const cleanBase = sanitizeFileName(path.parse(originalName).name);
       if (!cleanBase) throw new Error("Enter a filename with letters or numbers.");
@@ -1156,29 +1191,29 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
           : currentExtension;
       video.originalName = `${cleanBase}${extension}`;
       video.metadata.fileName = video.originalName;
-      await saveManifest();
+      await saveManifest(ctx);
       return toVideoRecordDto(video);
     },
     async deleteVideo(id: string) {
-      const video = videos.get(id);
+      const video = ctx.videoRepository.get(id);
       if (!video) return false;
-      await removeVideoRecord(video);
-      await pruneOrphanFiles();
-      await saveManifest();
+      await removeVideoRecord(ctx, video);
+      await pruneOrphanFiles(ctx);
+      await saveManifest(ctx);
       return true;
     },
     createOptimizationJob(videoId: string, rawSettings: Partial<OptimizationSettings>) {
-      const video = videos.get(videoId);
+      const video = ctx.videoRepository.get(videoId);
       if (!video) return { status: 202 };
       const settings = normalizeOptimizationSettings(rawSettings ?? {});
-      const existing = reusableJob(video, "encode", settings);
+      const existing = reusableJob(ctx, video, "encode", settings);
       if (existing) return { status: existing.status === "completed" ? 200 : 202, job: publicJob(existing) };
-      const job = createEncodeJob(video, settings, "encode");
-      runJob(job, video.storedPath);
+      const job = createEncodeJob(ctx, video, settings, "encode");
+      runJob(ctx, job, video.storedPath);
       return { status: 202, job: publicJob(job) };
     },
     createSampleJob(videoId: string, rawSettings: Partial<OptimizationSettings>, rawSampleSeconds?: unknown) {
-      const video = videos.get(videoId);
+      const video = ctx.videoRepository.get(videoId);
       if (!video) return { status: 202 };
       const settings = normalizeOptimizationSettings({
         ...(rawSettings ?? {}),
@@ -1188,14 +1223,14 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
         Math.max(Number(rawSampleSeconds ?? 5), 1),
         Math.max(1, video.metadata.durationSeconds || 5)
       );
-      const existing = reusableJob(video, "sample", settings);
+      const existing = reusableJob(ctx, video, "sample", settings);
       if (existing) return { status: existing.status === "completed" ? 200 : 202, job: publicJob(existing) };
-      const job = createEncodeJob(video, settings, "sample", "sample");
-      runJob(job, video.storedPath, sampleSeconds);
+      const job = createEncodeJob(ctx, video, settings, "sample", "sample");
+      runJob(ctx, job, video.storedPath, sampleSeconds);
       return { status: 202, job: publicJob(job) };
     },
     createPosterJob(videoId: string, rawAtSeconds?: unknown) {
-      const video = videos.get(videoId);
+      const video = ctx.videoRepository.get(videoId);
       if (!video) return undefined;
       const atSeconds = Math.min(
         Math.max(Number(rawAtSeconds ?? Math.min(1, video.metadata.durationSeconds / 2)), 0),
@@ -1204,7 +1239,7 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
       const jobId = nanoid();
       const baseName = sanitizeFileName(`${path.parse(video.originalName).name}-poster`);
       const outputFileName = `${baseName}.webp`;
-      const outputPath = path.join(outputDir, `${jobId}-${outputFileName}`);
+      const outputPath = path.join(ctx.outputDir, `${jobId}-${outputFileName}`);
       const settings = normalizeOptimizationSettings({ outputFilename: baseName });
       const job: Job = {
         id: jobId,
@@ -1219,31 +1254,33 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
         settings
       };
 
-      jobs.set(jobId, job);
-      void saveManifest();
-      runPosterJob(job, video.storedPath, atSeconds);
+      ctx.jobRepository.set(job);
+      void saveManifest(ctx);
+      runPosterJob(ctx, job, video.storedPath, atSeconds);
       return publicJob(job);
     },
     createSubtitleJob(videoId: string) {
-      const video = videos.get(videoId);
+      const video = ctx.videoRepository.get(videoId);
       if (!video) return { status: 404, error: "Video not found" };
       if (video.metadata.trackCounts.audio === 0) {
         return { status: 400, error: "No audio track found. Subtitles cannot be generated." };
       }
-      const existing = Array.from(jobs.values()).find(
-        (job) =>
-          job.videoId === video.id &&
-          job.kind === "subtitle" &&
-          (job.status === "queued" || job.status === "running" || job.status === "completed") &&
-          (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
-      );
+      const existing = ctx.jobRepository
+        .getAll()
+        .find(
+          (job) =>
+            job.videoId === video.id &&
+            job.kind === "subtitle" &&
+            (job.status === "queued" || job.status === "running" || job.status === "completed") &&
+            (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
+        );
       if (existing) return { status: existing.status === "completed" ? 200 : 202, job: publicJob(existing) };
-      const job = createSubtitleJob(video);
-      void runSubtitleJob(job, video.storedPath);
+      const job = createSubtitleJob(ctx, video);
+      void runSubtitleJob(ctx, job, video.storedPath);
       return { status: 202, job: publicJob(job) };
     },
     createPairJobs(videoId: string) {
-      const video = videos.get(videoId);
+      const video = ctx.videoRepository.get(videoId);
       if (!video) return undefined;
 
       const base = path.parse(video.originalName).name;
@@ -1283,80 +1320,80 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
         outputFilename: `${base}-modern-av1`
       });
 
-      const existingFallback = reusableJob(video, "encode", fallback);
-      const existingModern = reusableJob(video, "encode", modern);
-      const fallbackJob = existingFallback ?? createEncodeJob(video, fallback, "encode", "fallback-h264");
-      const modernJob = existingModern ?? createEncodeJob(video, modern, "encode", "modern-av1");
-      if (!existingFallback) runJob(fallbackJob, video.storedPath);
-      if (!existingModern) runJob(modernJob, video.storedPath);
+      const existingFallback = reusableJob(ctx, video, "encode", fallback);
+      const existingModern = reusableJob(ctx, video, "encode", modern);
+      const fallbackJob = existingFallback ?? createEncodeJob(ctx, video, fallback, "encode", "fallback-h264");
+      const modernJob = existingModern ?? createEncodeJob(ctx, video, modern, "encode", "modern-av1");
+      if (!existingFallback) runJob(ctx, fallbackJob, video.storedPath);
+      if (!existingModern) runJob(ctx, modernJob, video.storedPath);
       return { jobs: [publicJob(fallbackJob), publicJob(modernJob)] };
     },
     async createPackageJob(videoId: string, body: unknown) {
-      return createPackageJob(videoId, body);
+      return createPackageJob(ctx, videoId, body);
     },
     async deleteHistory(videoIds: string[], jobIds: string[]) {
       for (const jobId of jobIds) {
-        const job = jobs.get(jobId);
+        const job = ctx.jobRepository.get(jobId);
         if (!job) continue;
-        await removeJob(job);
+        await removeJob(ctx, job);
       }
 
       for (const videoId of videoIds) {
-        const video = videos.get(videoId);
+        const video = ctx.videoRepository.get(videoId);
         if (!video) continue;
-        await removeVideoRecord(video);
+        await removeVideoRecord(ctx, video);
       }
 
-      await pruneOrphanFiles();
-      await saveManifest();
-      return historySnapshot();
+      await pruneOrphanFiles(ctx);
+      await saveManifest(ctx);
+      return historySnapshot(ctx);
     },
     getJob(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       return job ? publicJob(job) : undefined;
     },
     async renameJob(id: string, outputFileName: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       if (!job || !job.outputFileName) return undefined;
       job.outputFileName = renamedOutputFileName(job.outputFileName, outputFileName);
       if (job.sidecarFileName && path.extname(job.outputFileName).toLowerCase() === ".vtt") {
         job.sidecarFileName = `${path.parse(job.outputFileName).name}.srt`;
       }
-      await saveManifest();
+      await saveManifest(ctx);
       return publicJob(job);
     },
     async cancelJob(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       if (!job) return undefined;
       if (job.status !== "running" && job.status !== "queued") return publicJob(job);
       job.status = "canceled";
       job.message = "Canceled and removed";
       job.completedAt = new Date().toISOString();
       const responseJob = publicJob(job);
-      await removeJob(job);
-      await saveManifest();
+      await removeJob(ctx, job);
+      await saveManifest(ctx);
       return responseJob;
     },
     getJobDownload(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       return job?.status === "completed" && job.outputPath && job.outputFileName
         ? { filePath: job.outputPath, fileName: job.outputFileName }
         : undefined;
     },
     getJobSidecar(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       return job?.status === "completed" && job.sidecarPath && job.sidecarFileName
         ? { filePath: job.sidecarPath, fileName: job.sidecarFileName }
         : undefined;
     },
     getJobOutput(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       return job?.status === "completed" && job.outputPath && job.outputFileName
         ? { filePath: job.outputPath, fileName: job.outputFileName }
         : undefined;
     },
     async getCaptions(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       if (!job || job.kind !== "subtitle" || job.status !== "completed" || !job.outputPath) return undefined;
       const vtt = await fs.promises.readFile(job.outputPath, "utf8");
       const srt =
@@ -1366,7 +1403,7 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
       return { vtt, srt };
     },
     async updateCaptions(id: string, rawVtt: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       if (!job || job.kind !== "subtitle" || job.status !== "completed" || !job.outputPath) return undefined;
       const vtt = rawVtt.trim();
       assertLooksLikeVtt(vtt);
@@ -1377,13 +1414,13 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
       }
       job.outputSize = (await stat(job.outputPath)).size;
       job.message = "Captions edited";
-      await saveManifest();
+      await saveManifest(ctx);
       return publicJob(job);
     },
     createMuxSubtitleJob(videoJobId: string, subtitleJobId: string) {
-      const videoJob = jobs.get(videoJobId);
-      const subtitleJob = jobs.get(subtitleJobId);
-      const video = videoJob ? videos.get(videoJob.videoId) : undefined;
+      const videoJob = ctx.jobRepository.get(videoJobId);
+      const subtitleJob = ctx.jobRepository.get(subtitleJobId);
+      const video = videoJob ? ctx.videoRepository.get(videoJob.videoId) : undefined;
       if (
         !videoJob ||
         !video ||
@@ -1403,32 +1440,33 @@ export function createProductionRuntime(apiConfig: ApiConfig): ApiRuntime {
         return { status: 400, error: "Completed subtitle output not found" };
       }
 
-      const job = createMuxJob(video, videoJob, subtitleJob);
-      runMuxJob(job, videoJob, subtitleJob);
+      const job = createMuxJob(ctx, video, videoJob, subtitleJob);
+      runMuxJob(ctx, job, videoJob, subtitleJob);
       return { status: 202, job: publicJob(job) };
     },
     async revealJob(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       if (!job || job.status !== "completed" || !job.outputPath || !fs.existsSync(job.outputPath)) return false;
       await revealInFileManager(job.outputPath);
       return true;
     },
     async deleteJob(id: string) {
-      const job = jobs.get(id);
+      const job = ctx.jobRepository.get(id);
       if (!job) return false;
-      await removeJob(job);
-      await pruneOrphanFiles();
-      await saveManifest();
+      await removeJob(ctx, job);
+      await pruneOrphanFiles(ctx);
+      await saveManifest(ctx);
       return true;
     }
   };
 }
 
 async function createPackageJob(
+  ctx: RuntimeContext,
   videoId: string,
   body: unknown
 ): Promise<{ status: 201 | 400 | 404; job?: JobDto; error?: string }> {
-  const video = videos.get(videoId);
+  const video = ctx.videoRepository.get(videoId);
   if (!video) {
     return { status: 404, error: "Video not found" };
   }
@@ -1442,14 +1480,16 @@ async function createPackageJob(
   const filenamePrefix =
     sanitizeFileName(String(packageMeta.filenamePrefix || path.parse(video.originalName).name).trim()) ||
     sanitizeFileName(path.parse(video.originalName).name);
-  const candidateJobs = Array.from(jobs.values()).filter(
-    (job) =>
-      job.videoId === video.id &&
-      job.status === "completed" &&
-      job.outputPath &&
-      (job.kind === "encode" || job.kind === "mux" || job.kind === "poster" || job.kind === "subtitle") &&
-      (requestedJobIds.length === 0 || requestedJobIds.includes(job.id))
-  );
+  const candidateJobs = ctx.jobRepository
+    .getAll()
+    .filter(
+      (job) =>
+        job.videoId === video.id &&
+        job.status === "completed" &&
+        job.outputPath &&
+        (job.kind === "encode" || job.kind === "mux" || job.kind === "poster" || job.kind === "subtitle") &&
+        (requestedJobIds.length === 0 || requestedJobIds.includes(job.id))
+    );
   const encodeJobs = candidateJobs.filter((job) => job.kind === "encode" || job.kind === "mux");
   const posterJob = candidateJobs.find((job) => job.kind === "poster");
   const subtitleJob = candidateJobs.find((job) => job.kind === "subtitle");
@@ -1653,10 +1693,11 @@ ${sources}${track ? `\n${track}` : ""}
   const zip = createZip(entries);
   const packageId = nanoid();
   const outputFileName = `${filenamePrefix}-web-package.zip`;
-  const outputPath = path.join(outputDir, `${packageId}-${outputFileName}`);
+  const outputPath = path.join(ctx.outputDir, `${packageId}-${outputFileName}`);
   await fs.promises.writeFile(outputPath, zip);
 
   const job = createEncodeJob(
+    ctx,
     video,
     normalizeOptimizationSettings({ outputFilename: path.parse(outputFileName).name }),
     "package",
@@ -1670,7 +1711,7 @@ ${sources}${track ? `\n${track}` : ""}
   job.outputPath = outputPath;
   job.outputSize = zip.length;
   job.ffmpegCommand = "Generated package from completed outputs";
-  await saveManifest();
+  await saveManifest(ctx);
 
   return { status: 201, job: publicJob(job) };
 }

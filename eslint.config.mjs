@@ -54,7 +54,31 @@ export default tseslint.config(
       "no-restricted-imports": [
         "error",
         {
-          paths: ["react", "react-dom", "node:child_process"]
+          paths: ["react", "react-dom", "node:child_process"],
+          patterns: ["../repositories/**", "../persistence/**", "../entities/**"]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/repositories/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "react", "react-dom"],
+          patterns: ["../routes/**", "../dto/**"]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/persistence/**/*.ts", "apps/api/src/entities/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "react", "react-dom"]
         }
       ]
     }

@@ -52,9 +52,20 @@ Route modules in `apps/api/src/routes` are HTTP adapters. They extract request p
 status codes, response headers, SSE mechanics, downloads, and byte-range streaming. They depend on the temporary
 coarse `ApiRuntime` boundary rather than global maps or production storage details.
 
-`apps/api/src/runtime/production-runtime.ts` still owns the existing production implementation: video/job state,
-manifest persistence, storage cleanup, FFmpeg/FFprobe/Whisper/yt-dlp execution, packaging, and file-manager reveal
-behavior. This is intentionally coarse for Phase 3; Phase 4 should split it into focused services and repositories.
+`apps/api/src/runtime/production-runtime.ts` remains the production workflow coordinator behind `ApiRuntime`. Video and
+job collections are owned by runtime-scoped repository instances rather than module-level maps. The file manifest store
+owns manifest reading and writing, while the runtime still owns persistence policy such as restart normalization,
+duplicate-video merging, orphan pruning, and deletion cascades.
+
+Internal API entities live under `apps/api/src/entities`. They contain storage paths, output paths, sidecar paths, and
+source hashes needed for local persistence and recovery. Public JSON responses are still constructed through explicit
+DTO mappers in `apps/api/src/dto`, so private implementation fields do not leak into browser responses.
+
+Repository instances are created per production runtime. They are not global singletons, which allows independently
+created runtimes to keep video state, job state, directory configuration, and manifest restoration isolated. The
+production runtime still coordinates process handles, FFmpeg/FFprobe/Whisper/yt-dlp workflows, packaging, and
+file-manager reveal behavior temporarily. Phase 4B should extract process execution and focused application services.
+Phase 5 should improve queueing, persistence reliability, shutdown, and recovery mechanics.
 
 Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
 public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output
