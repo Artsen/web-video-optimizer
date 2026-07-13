@@ -1,6 +1,6 @@
 # Testing And Quality Checks
 
-This repository uses npm workspaces for the API and web app.
+This repository uses npm workspaces for the shared contracts package, API, and web app.
 
 ## Requirements
 
@@ -46,6 +46,12 @@ Run unit tests once:
 npm run test:run
 ```
 
+Run only the shared contracts tests:
+
+```bash
+npm run test:run --workspace packages/contracts
+```
+
 Run unit tests in watch mode:
 
 ```bash
@@ -68,6 +74,7 @@ npm run check
 
 The initial unit tests cover pure behavior extracted from the current API and web entry files:
 
+- Shared runtime contract schemas for public API/browser data
 - Filename sanitization
 - FFprobe frame-rate and number parsing
 - Web compatibility warning generation

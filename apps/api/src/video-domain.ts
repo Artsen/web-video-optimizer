@@ -1,3 +1,7 @@
+import type { OptimizationSettings, VideoMetadata } from "@local-video-optimizer/contracts";
+
+export type { OptimizationSettings, VideoMetadata };
+
 export type FFprobeStream = {
   index?: number;
   codec_type?: string;
@@ -29,60 +33,6 @@ export type FFprobeResult = {
     tags?: Record<string, string>;
   };
   streams?: FFprobeStream[];
-};
-
-export type VideoMetadata = {
-  fileName: string;
-  fileSize: number;
-  durationSeconds: number;
-  container: string;
-  formatLongName?: string;
-  videoCodec?: string;
-  audioCodec?: string;
-  trackCounts: {
-    video: number;
-    audio: number;
-    subtitle: number;
-  };
-  width?: number;
-  height?: number;
-  displayAspectRatio?: string;
-  frameRate?: number;
-  overallBitrate?: number;
-  videoBitrate?: number;
-  audioBitrate?: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  pixelFormat?: string;
-  color?: {
-    space?: string;
-    transfer?: string;
-    primaries?: string;
-  };
-  rotation?: string;
-  tags?: Record<string, string>;
-  webFriendly: boolean;
-  warnings: string[];
-};
-
-export type OptimizationSettings = {
-  outputContainer: "mp4" | "webm";
-  videoCodec: "libx264" | "libaom-av1" | "libvpx-vp9";
-  audioCodec: "aac" | "libopus";
-  width?: number;
-  height?: number;
-  crf: number;
-  preset: "ultrafast" | "superfast" | "veryfast" | "faster" | "fast" | "medium" | "slow";
-  cpuUsed?: number;
-  rowMt?: boolean;
-  frameRate?: number;
-  audioMode: "keep" | "compress" | "remove";
-  audioBitrateKbps?: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  fastStart: boolean;
-  stripMetadata: boolean;
-  outputFilename?: string;
 };
 
 export type ParsedByteRange = {

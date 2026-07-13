@@ -6,8 +6,28 @@ The app has two local services:
 
 - `apps/web`: React + TypeScript UI served by Vite.
 - `apps/api`: Express API that receives uploads, runs FFprobe/FFmpeg, and streams local files.
+- `packages/contracts`: shared Zod schemas and inferred TypeScript types for public API/browser data.
 
 Docker Compose runs both services and installs FFmpeg in the API image.
+
+## Shared Contracts
+
+`packages/contracts` owns public cross-application schemas and types for video metadata, optimization settings, jobs,
+history, capabilities, and website package metadata. These contracts describe the data passed between the API and the
+browser and are intended to be reused by future CLI and MCP adapters.
+
+The contracts package does not contain business execution logic, React components, Express route handlers, filesystem
+paths, child-process behavior, FFmpeg command execution, or persistence code. API-private entities remain in `apps/api`,
+including stored upload paths, output paths, sidecar paths, process handles, storage configuration, raw FFprobe
+structures, and Express/Multer objects. Browser-only UI types remain in `apps/web`, including component props, modal
+state, tab/view state, presentation metadata, and React nodes.
+
+Phase 2A establishes the shared contract boundary only. Phase 2B will still need to extract reusable pure video-domain
+logic into a separate package.
+
+Current compatibility note: some API responses still spread internal job or video entities directly, which can expose
+private implementation fields such as absolute filesystem paths. Phase 2A documents that behavior and preserves the
+existing wire shape; a later API hardening phase should introduce explicit DTO mapping before changing responses.
 
 ## Data Flow
 
