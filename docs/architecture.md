@@ -52,20 +52,64 @@ Route modules in `apps/api/src/routes` are HTTP adapters. They extract request p
 status codes, response headers, SSE mechanics, downloads, and byte-range streaming. They depend on the temporary
 coarse `ApiRuntime` boundary rather than global maps or production storage details.
 
-`apps/api/src/runtime/production-runtime.ts` remains the production workflow coordinator behind `ApiRuntime`. Video and
-job collections are owned by runtime-scoped repository instances rather than module-level maps. The file manifest store
-owns manifest reading and writing, while the runtime still owns persistence policy such as restart normalization,
-duplicate-video merging, orphan pruning, and deletion cascades.
+`apps/api/src/runtime/production-runtime.ts` is the production composition root and `ApiRuntime` facade. It constructs
+runtime-scoped repositories, the file manifest store, process infrastructure, tool adapters, and focused application
+services, then delegates route-facing operations through the stable `ApiRuntime` interface.
 
 Internal API entities live under `apps/api/src/entities`. They contain storage paths, output paths, sidecar paths, and
 source hashes needed for local persistence and recovery. Public JSON responses are still constructed through explicit
 DTO mappers in `apps/api/src/dto`, so private implementation fields do not leak into browser responses.
 
 Repository instances are created per production runtime. They are not global singletons, which allows independently
-created runtimes to keep video state, job state, directory configuration, and manifest restoration isolated. The
-production runtime still coordinates process handles, FFmpeg/FFprobe/Whisper/yt-dlp workflows, packaging, and
-file-manager reveal behavior temporarily. Phase 4B should extract process execution and focused application services.
-Phase 5 should improve queueing, persistence reliability, shutdown, and recovery mechanics.
+created runtimes to keep video state, job state, directory configuration, and manifest restoration isolated.
+
+Process creation is behind `ProcessRunner`, with the Node implementation isolated in
+`apps/api/src/infrastructure/processes/node-process-runner.ts`. Running job processes are tracked through a
+runtime-scoped `ProcessRegistry`. Tool-specific behavior is behind infrastructure adapters for FFprobe, FFmpeg encoder
+capability detection, whisper.cpp resolution, yt-dlp importing, and desktop file reveal behavior.
+
+Application services own API-private workflows:
+
+- `StatePersistenceService`: manifest load/save policy, including restart cancellation normalization.
+- `CleanupService`: job artifact deletion, active-process termination, video deletion cascades, and orphan pruning.
+- `VideoService`: upload/import storage, content hashing, duplicate detection, metadata probing, rename, source
+  descriptors, downloads, and video deletion delegation.
+- `JobService`: job lookup, optimization/sample/poster/pair creation, reuse policy, descriptors, rename, cancellation,
+  deletion, reveal delegation, and public job DTO mapping.
+- `JobExecutionService`: FFmpeg-backed encode, sample, poster, and subtitle-mux process lifecycles, progress parsing,
+  stderr message updates, output-size capture, sample estimates, registry cleanup, and artifact cleanup on failure.
+- `CaptionService`: subtitle-job validation/reuse/creation, leading-silence detection, audio extraction, whisper.cpp
+  transcription, VTT/SRT handling, caption editing, and subtitle-mux validation/delegation.
+- `PackageService`: website-package request interpretation, selected-output reading, generated HTML/README/transcript
+  creation, ZIP assembly, package-job completion, and public result mapping.
+- `CapabilitiesService`: combines FFmpeg, whisper.cpp, and yt-dlp capability reporting.
+- Packaging helpers remain API-private under `apps/api/src/services/helpers`.
+
+The production runtime constructs this graph and returns an `ApiRuntime` facade:
+
+```text
+routes
+  ->
+ApiRuntime
+  ->
+production-runtime composition
+  |-- CapabilitiesService
+  |-- VideoService
+  |-- JobService
+  |-- JobExecutionService
+  |-- CaptionService
+  |-- PackageService
+  |-- CleanupService
+  `-- StatePersistenceService
+      ->
+repositories, manifest store, process/tool infrastructure
+```
+
+Routes continue to depend only on `ApiRuntime` and route-safe DTO types. Future CLI and MCP adapters should call the
+same application services, or a facade over them, rather than duplicating media workflow logic.
+
+Phase 5 should improve queueing, persistence reliability, shutdown, and recovery mechanics. It should not be mixed into
+the Phase 4 structural boundaries.
 
 Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
 public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output
@@ -80,7 +124,7 @@ paths, and sidecar paths are no longer part of public JSON responses.
 5. The user chooses optimization settings.
 6. The web app starts an encoding job with `POST /api/videos/:id/jobs`.
 7. The route layer delegates job creation to `ApiRuntime`.
-8. The production runtime runs FFmpeg locally and updates in-memory job state.
+8. The API starts FFmpeg through the process-runner boundary and updates repository-backed job state.
 9. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
 10. The final output is streamed from `GET /api/jobs/:id/download`.
 

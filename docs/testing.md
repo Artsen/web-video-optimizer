@@ -111,10 +111,33 @@ The initial unit tests cover pure behavior extracted from the current API and we
   malformed-manifest warnings, path isolation, and preservation of private persisted fields
 - Runtime isolation with injected repositories and manifest stores, including isolated videos, jobs, directory
   configuration, manifest restoration, and DTO privacy
+- Process infrastructure tests for the Node process-runner adapter and deterministic fake process handles
+- Tool-adapter tests for FFprobe invocation, FFmpeg capability parsing, whisper.cpp command resolution, and yt-dlp
+  command resolution/import arguments
+- Application service tests for manifest persistence policy, cleanup cascades, capability aggregation, upload storage,
+  duplicate detection, metadata probing, rename behavior, and download/delete descriptors
+- Job-service tests for job creation, reuse behavior, sample/poster clamping, exact pair settings, rename, cancellation,
+  descriptors, persistence, and fake execution delegation
+- Job-execution tests for fake FFmpeg process startup, progress parsing, stderr handling, completion, sample estimates,
+  spawn errors, nonzero exits, canceled closes, poster arguments, mux arguments, registry cleanup, and artifact cleanup
+- Caption-service tests for subtitle validation, job naming, missing Whisper configuration, leading-silence parsing,
+  caption retrieval/editing, SRT generation, mux validation, and fake execution delegation
+- Package-service tests for package validation, selected output reading, generated archive entry names, transcript
+  creation, caption-noise removal, package job completion fields, output size, persistence, and DTO privacy
+- Package helper tests for API-private ZIP, HTML, JSON, duration, transcript, and caption-cleaning helpers
 
 The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
 argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
 future real-media integration tests.
+
+Fast process-backed unit tests use `apps/api/src/infrastructure/processes/test/fake-process-runner.ts`. The fake captures
+command names, argument arrays, spawn options, stdout/stderr chunks, close events, error events, `kill`, and `unref`
+without launching real programs. Service tests should use temporary directories for filesystem behavior and fakes for
+tool/process boundaries unless they are explicitly marked as real-media integration tests.
+
+Archive tests use a small test-only ZIP entry-name reader to verify generated package structure without adding a
+production ZIP dependency. Caption and execution tests use fake process sequences; real Whisper/FFmpeg behavior remains
+manual smoke-test coverage unless an integration test is added explicitly.
 
 API route tests use Supertest directly against `createApp(fakeRuntime)`. They exercise HTTP extraction, status codes,
 SSE/download-adjacent response behavior where practical, shared-schema parsing, and privacy assertions without opening
@@ -128,8 +151,8 @@ records, and keeping public DTOs free of private paths and hashes.
 ## Not Covered Yet
 
 - Full production-runtime route integration
-- Real multipart upload storage and cleanup behavior
-- FFmpeg process execution and progress parsing
+- Real multipart upload storage through the production HTTP server
+- Real FFmpeg process execution
 - Browser rendering behavior
 - End-to-end package ZIP validation with real media
 - Subtitle generation through whisper.cpp

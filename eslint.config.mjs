@@ -55,7 +55,43 @@ export default tseslint.config(
         "error",
         {
           paths: ["react", "react-dom", "node:child_process"],
-          patterns: ["../repositories/**", "../persistence/**", "../entities/**"]
+          patterns: [
+            "../services/**",
+            "../infrastructure/**",
+            "../repositories/**",
+            "../persistence/**",
+            "../entities/**"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/services/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "multer", "react", "react-dom", "node:child_process"],
+          patterns: ["../routes/**"]
+        }
+      ]
+    }
+  },
+  {
+    files: [
+      "apps/api/src/*.ts",
+      "apps/api/src/runtime/**/*.ts",
+      "apps/api/src/repositories/**/*.ts",
+      "apps/api/src/persistence/**/*.ts",
+      "apps/api/src/entities/**/*.ts",
+      "apps/api/src/dto/**/*.ts"
+    ],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["node:child_process"]
         }
       ]
     }
@@ -67,7 +103,19 @@ export default tseslint.config(
         "error",
         {
           paths: ["express", "react", "react-dom"],
-          patterns: ["../routes/**", "../dto/**"]
+          patterns: ["../routes/**", "../dto/**", "../services/**"]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/infrastructure/tools/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "multer", "react", "react-dom"],
+          patterns: ["../../routes/**", "../../dto/**"]
         }
       ]
     }
