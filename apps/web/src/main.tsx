@@ -287,8 +287,8 @@ function buildVideoMarkup(job: Job, settings: OptimizationSettings): string {
 </video>`;
 }
 
-function describeMediaError(video: HTMLVideoElement): string {
-  const error = video.error;
+function describeMediaError(video: HTMLVideoElement | null): string {
+  const error = video?.error;
   if (!error) return "Media could not be loaded.";
   if (error.code === MediaError.MEDIA_ERR_NETWORK) return "Media request failed while loading this output.";
   if (error.code === MediaError.MEDIA_ERR_DECODE) return "Media loaded, but this browser could not decode it.";
@@ -2566,12 +2566,13 @@ function App() {
                           ref={originalCompareRef}
                           src={sourceUrl}
                           onLoadedData={() => setCompareMediaErrors((current) => ({ ...current, original: undefined }))}
-                          onError={(event) =>
+                          onError={(event) => {
+                            const message = describeMediaError(event.currentTarget);
                             setCompareMediaErrors((current) => ({
                               ...current,
-                              original: describeMediaError(event.currentTarget)
-                            }))
-                          }
+                              original: message
+                            }));
+                          }}
                           onPlay={() => syncVideoState("original", "play")}
                           onPause={() => syncVideoState("original", "pause")}
                           onSeeked={() => syncVideoState("original", "seek")}
@@ -2588,12 +2589,13 @@ function App() {
                           onLoadedData={() =>
                             setCompareMediaErrors((current) => ({ ...current, optimized: undefined }))
                           }
-                          onError={(event) =>
+                          onError={(event) => {
+                            const message = describeMediaError(event.currentTarget);
                             setCompareMediaErrors((current) => ({
                               ...current,
-                              optimized: describeMediaError(event.currentTarget)
-                            }))
-                          }
+                              optimized: message
+                            }));
+                          }}
                           onPlay={() => syncVideoState("optimized", "play")}
                           onPause={() => syncVideoState("optimized", "pause")}
                           onSeeked={() => syncVideoState("optimized", "seek")}
