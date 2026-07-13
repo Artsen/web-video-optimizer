@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+.vite/
+.env
+.env.local
+.env.*.local
+.npm/
+.agents/
+.codex/
+coverage/
+data/
+*.log
+*.tmp
+ffmpeg-ui-source.zip
+.DS_Store
+Thumbs.db
