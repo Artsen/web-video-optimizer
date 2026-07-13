@@ -16,6 +16,7 @@ describe("parseApiConfig", () => {
       port: 4000,
       corsOrigin: true,
       uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
+      maxConcurrentMediaJobs: 1,
       ytDlpJsRuntime: "node:C:\\Program Files\\nodejs\\node.exe"
     });
   });
@@ -30,6 +31,29 @@ describe("parseApiConfig", () => {
   it("rejects invalid ports", () => {
     expect(() => parseApiConfig({ PORT: "nope" }, options)).toThrow("Invalid PORT: nope");
     expect(() => parseApiConfig({ PORT: "70000" }, options)).toThrow("Invalid PORT: 70000");
+  });
+
+  it("accepts explicit media concurrency values", () => {
+    expect(parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "1" }, options).maxConcurrentMediaJobs).toBe(1);
+    expect(parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "3" }, options).maxConcurrentMediaJobs).toBe(3);
+  });
+
+  it("rejects invalid media concurrency values", () => {
+    expect(() => parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "0" }, options)).toThrow(
+      "Invalid MAX_CONCURRENT_MEDIA_JOBS: 0"
+    );
+    expect(() => parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "-1" }, options)).toThrow(
+      "Invalid MAX_CONCURRENT_MEDIA_JOBS: -1"
+    );
+    expect(() => parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "1.5" }, options)).toThrow(
+      "Invalid MAX_CONCURRENT_MEDIA_JOBS: 1.5"
+    );
+    expect(() => parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "many" }, options)).toThrow(
+      "Invalid MAX_CONCURRENT_MEDIA_JOBS: many"
+    );
+    expect(() => parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "" }, options)).toThrow(
+      "Invalid MAX_CONCURRENT_MEDIA_JOBS: "
+    );
   });
 
   it("derives storage paths from an explicit storage root", () => {

@@ -6,6 +6,7 @@ import type { ProcessRegistry } from "../infrastructure/processes/process-regist
 import type { ProcessRunner } from "../infrastructure/processes/process-runner.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { CleanupService } from "./cleanup-service.js";
+import type { JobLifecycle } from "./job-lifecycle-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
 import { commandPreview } from "./helpers/command-preview.js";
 
@@ -24,9 +25,9 @@ export function buildMuxSubtitleArgs(
 }
 
 export interface JobExecutor {
-  runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): void;
-  runPoster(job: JobEntity, inputPath: string, atSeconds: number): void;
-  runMux(job: JobEntity, videoJob: JobEntity, subtitleJob: JobEntity): void;
+  runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): Promise<void>;
+  runPoster(job: JobEntity, inputPath: string, atSeconds: number): Promise<void>;
+  runMux(job: JobEntity, videoJob: JobEntity, subtitleJob: JobEntity): Promise<void>;
 }
 
 export class JobExecutionService implements JobExecutor {
@@ -36,10 +37,16 @@ export class JobExecutionService implements JobExecutor {
     private readonly videos: VideoRepository,
     private readonly jobs: JobRepository,
     private readonly persistence: StatePersistenceService,
-    private readonly cleanup: CleanupService
+    private readonly cleanup: CleanupService,
+    private readonly lifecycle: JobLifecycle
   ) {}
 
-  runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): void {
+  runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): Promise<void> {
+    if (!this.lifecycle.start(job, "Encoding started")) {
+      return Promise.resolve();
+    }
+    void this.persistence.save();
+
     const args = [
       "-progress",
       "pipe:1",
@@ -49,9 +56,6 @@ export class JobExecutionService implements JobExecutor {
     const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
     this.processRegistry.set(job.id, child);
 
-    job.status = "running";
-    job.message = "Encoding started";
-
     child.stdout?.on("data", (chunk) => {
       const text = String(chunk);
       const outTimeMs = text.match(/out_time_ms=(\d+)/);
@@ -59,59 +63,60 @@ export class JobExecutionService implements JobExecutor {
 
       if (outTimeMs && sourceDuration > 0) {
         const elapsed = Number(outTimeMs[1]) / 1_000_000;
-        job.progress = Math.min(99, Math.round((elapsed / sourceDuration) * 100));
-        job.message = `Encoding ${job.progress}%`;
+        const progress = Math.min(99, Math.round((elapsed / sourceDuration) * 100));
+        this.lifecycle.updateProgress(job, progress, `Encoding ${progress}%`);
       }
     });
 
     this.updateMessageFromStderr(job, child);
 
-    child.on("error", (error) => {
-      job.status = "failed";
-      job.message = error.message;
-      job.completedAt = new Date().toISOString();
-      this.processRegistry.delete(job.id);
-      void this.cleanup.removeJobArtifacts(job);
-      void this.persistence.save();
-    });
+    return this.settleOnProcessEvents(job, child, {
+      onError: async (error) => {
+        if (this.lifecycle.fail(job, error.message)) {
+          await this.cleanup.removeJobArtifacts(job);
+          await this.persistence.save();
+        }
+      },
+      onClose: async (code) => {
+        if (job.status === "canceled") {
+          job.progress = 0;
+          job.message = "Canceled";
+          await this.persistence.save();
+          return;
+        }
+        if (code !== 0) {
+          if (this.lifecycle.fail(job, `FFmpeg exited with code ${code}`)) {
+            await this.cleanup.removeJobArtifacts(job);
+            await this.persistence.save();
+          }
+          return;
+        }
 
-    child.on("close", async (code) => {
-      this.processRegistry.delete(job.id);
-      job.completedAt = new Date().toISOString();
-      if (job.status === "canceled") {
-        job.progress = 0;
-        job.message = "Canceled";
-        void this.persistence.save();
-        return;
+        if (this.lifecycle.complete(job, "Encoding complete")) {
+          job.outputSize = (await stat(job.outputPath!)).size;
+          if (job.kind === "sample" && durationLimitSeconds) {
+            const duration = this.videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
+            const estimatedFullSize =
+              duration > 0 ? Math.round((job.outputSize * duration) / durationLimitSeconds) : job.outputSize;
+            const originalSize = this.videos.get(job.videoId)?.metadata.fileSize;
+            job.sampleEstimate = {
+              sampleSeconds: durationLimitSeconds,
+              estimatedFullSize,
+              estimatedReduction: originalSize ? Math.round((1 - estimatedFullSize / originalSize) * 100) : undefined
+            };
+          }
+          await this.persistence.save();
+        }
       }
-      if (code !== 0) {
-        job.status = "failed";
-        job.message = `FFmpeg exited with code ${code}`;
-        await this.cleanup.removeJobArtifacts(job);
-        void this.persistence.save();
-        return;
-      }
-
-      job.status = "completed";
-      job.progress = 100;
-      job.message = "Encoding complete";
-      job.outputSize = (await stat(job.outputPath!)).size;
-      if (job.kind === "sample" && durationLimitSeconds) {
-        const duration = this.videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
-        const estimatedFullSize =
-          duration > 0 ? Math.round((job.outputSize * duration) / durationLimitSeconds) : job.outputSize;
-        const originalSize = this.videos.get(job.videoId)?.metadata.fileSize;
-        job.sampleEstimate = {
-          sampleSeconds: durationLimitSeconds,
-          estimatedFullSize,
-          estimatedReduction: originalSize ? Math.round((1 - estimatedFullSize / originalSize) * 100) : undefined
-        };
-      }
-      void this.persistence.save();
     });
   }
 
-  runPoster(job: JobEntity, inputPath: string, atSeconds: number): void {
+  runPoster(job: JobEntity, inputPath: string, atSeconds: number): Promise<void> {
+    if (!this.lifecycle.start(job, "Generating poster")) {
+      return Promise.resolve();
+    }
+    void this.persistence.save();
+
     const args = [
       "-y",
       "-ss",
@@ -128,43 +133,42 @@ export class JobExecutionService implements JobExecutor {
     ];
     const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
     this.processRegistry.set(job.id, child);
-    job.status = "running";
-    job.message = "Generating poster";
     job.ffmpegCommand = commandPreview(args);
 
-    child.on("error", (error) => {
-      job.status = "failed";
-      job.message = error.message;
-      job.completedAt = new Date().toISOString();
-      this.processRegistry.delete(job.id);
-      void this.cleanup.removeJobArtifacts(job);
-      void this.persistence.save();
-    });
-
-    child.on("close", async (code) => {
-      this.processRegistry.delete(job.id);
-      job.completedAt = new Date().toISOString();
-      if (job.status === "canceled") {
-        job.message = "Canceled";
-        void this.persistence.save();
-        return;
+    return this.settleOnProcessEvents(job, child, {
+      onError: async (error) => {
+        if (this.lifecycle.fail(job, error.message)) {
+          await this.cleanup.removeJobArtifacts(job);
+          await this.persistence.save();
+        }
+      },
+      onClose: async (code) => {
+        if (job.status === "canceled") {
+          job.message = "Canceled";
+          await this.persistence.save();
+          return;
+        }
+        if (code !== 0) {
+          if (this.lifecycle.fail(job, `FFmpeg exited with code ${code}`)) {
+            await this.cleanup.removeJobArtifacts(job);
+            await this.persistence.save();
+          }
+          return;
+        }
+        if (this.lifecycle.complete(job, "Poster generated")) {
+          job.outputSize = (await stat(job.outputPath!)).size;
+          await this.persistence.save();
+        }
       }
-      if (code !== 0) {
-        job.status = "failed";
-        job.message = `FFmpeg exited with code ${code}`;
-        await this.cleanup.removeJobArtifacts(job);
-        void this.persistence.save();
-        return;
-      }
-      job.status = "completed";
-      job.progress = 100;
-      job.message = "Poster generated";
-      job.outputSize = (await stat(job.outputPath!)).size;
-      void this.persistence.save();
     });
   }
 
-  runMux(job: JobEntity, videoJob: JobEntity, subtitleJob: JobEntity): void {
+  runMux(job: JobEntity, videoJob: JobEntity, subtitleJob: JobEntity): Promise<void> {
+    if (!this.lifecycle.start(job, "Embedding subtitle track")) {
+      return Promise.resolve();
+    }
+    void this.persistence.save();
+
     const args = [
       "-progress",
       "pipe:1",
@@ -178,8 +182,6 @@ export class JobExecutionService implements JobExecutor {
     ];
     const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
     this.processRegistry.set(job.id, child);
-    job.status = "running";
-    job.message = "Embedding subtitle track";
 
     child.stdout?.on("data", (chunk) => {
       const text = String(chunk);
@@ -187,44 +189,40 @@ export class JobExecutionService implements JobExecutor {
       const sourceDuration = this.videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
       if (outTimeMs && sourceDuration > 0) {
         const elapsed = Number(outTimeMs[1]) / 1_000_000;
-        job.progress = Math.min(99, Math.round((elapsed / sourceDuration) * 100));
-        job.message = `Embedding captions ${job.progress}%`;
+        const progress = Math.min(99, Math.round((elapsed / sourceDuration) * 100));
+        this.lifecycle.updateProgress(job, progress, `Embedding captions ${progress}%`);
       }
     });
 
     this.updateMessageFromStderr(job, child);
 
-    child.on("error", (error) => {
-      job.status = "failed";
-      job.message = error.message;
-      job.completedAt = new Date().toISOString();
-      this.processRegistry.delete(job.id);
-      void this.cleanup.removeJobArtifacts(job);
-      void this.persistence.save();
-    });
+    return this.settleOnProcessEvents(job, child, {
+      onError: async (error) => {
+        if (this.lifecycle.fail(job, error.message)) {
+          await this.cleanup.removeJobArtifacts(job);
+          await this.persistence.save();
+        }
+      },
+      onClose: async (code) => {
+        if (job.status === "canceled") {
+          job.progress = 0;
+          job.message = "Canceled";
+          await this.persistence.save();
+          return;
+        }
+        if (code !== 0) {
+          if (this.lifecycle.fail(job, `FFmpeg exited with code ${code}`)) {
+            await this.cleanup.removeJobArtifacts(job);
+            await this.persistence.save();
+          }
+          return;
+        }
 
-    child.on("close", async (code) => {
-      this.processRegistry.delete(job.id);
-      job.completedAt = new Date().toISOString();
-      if (job.status === "canceled") {
-        job.progress = 0;
-        job.message = "Canceled";
-        void this.persistence.save();
-        return;
+        if (this.lifecycle.complete(job, "Captions embedded")) {
+          job.outputSize = (await stat(job.outputPath!)).size;
+          await this.persistence.save();
+        }
       }
-      if (code !== 0) {
-        job.status = "failed";
-        job.message = `FFmpeg exited with code ${code}`;
-        await this.cleanup.removeJobArtifacts(job);
-        void this.persistence.save();
-        return;
-      }
-
-      job.status = "completed";
-      job.progress = 100;
-      job.message = "Captions embedded";
-      job.outputSize = (await stat(job.outputPath!)).size;
-      void this.persistence.save();
     });
   }
 
@@ -234,6 +232,36 @@ export class JobExecutionService implements JobExecutor {
       if (text && job.status === "running") {
         job.message = text.split("\n").at(-1)?.slice(0, 220) || job.message;
       }
+    });
+  }
+
+  private settleOnProcessEvents(
+    job: JobEntity,
+    child: ReturnType<ProcessRunner["spawn"]>,
+    handlers: {
+      onError: (error: Error) => Promise<void>;
+      onClose: (code: number | null) => Promise<void>;
+    }
+  ): Promise<void> {
+    let settled = false;
+    const settle = async (handler: () => Promise<void>, resolve: () => void) => {
+      if (settled) return;
+      settled = true;
+      this.processRegistry.delete(job.id);
+      try {
+        await handler();
+      } finally {
+        resolve();
+      }
+    };
+
+    return new Promise((resolve) => {
+      child.on("error", (error) => {
+        void settle(() => handlers.onError(error), resolve);
+      });
+      child.on("close", (code) => {
+        void settle(() => handlers.onClose(code), resolve);
+      });
     });
   }
 }

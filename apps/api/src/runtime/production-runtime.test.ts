@@ -44,6 +44,7 @@ function config(storageRoot: string): ApiConfig {
     tmpDir: path.join(storageRoot, "tmp"),
     manifestPath: path.join(storageRoot, "manifest.json"),
     uploadFileSizeLimitBytes: 1234,
+    maxConcurrentMediaJobs: 1,
     ytDlpJsRuntime: "node:test"
   };
 }

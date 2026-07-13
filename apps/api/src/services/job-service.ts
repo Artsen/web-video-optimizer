@@ -9,8 +9,10 @@ import type { VideoEntity } from "../entities/video-entity.js";
 import type { FileRevealer } from "../infrastructure/desktop/file-revealer.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { StreamDescriptor } from "../runtime/api-runtime.js";
+import type { JobScheduler } from "../scheduling/job-scheduler.js";
 import type { CleanupService } from "./cleanup-service.js";
 import type { JobExecutor } from "./job-execution-service.js";
+import type { JobLifecycle } from "./job-lifecycle-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
 import { commandPreview } from "./helpers/command-preview.js";
 import { renamedOutputFileName } from "./helpers/output-file-name.js";
@@ -23,7 +25,9 @@ export class JobService {
     private readonly persistence: StatePersistenceService,
     private readonly cleanup: CleanupService,
     private readonly execution: JobExecutor,
-    private readonly fileRevealer: FileRevealer
+    private readonly fileRevealer: FileRevealer,
+    private readonly scheduler: JobScheduler,
+    private readonly lifecycle: JobLifecycle
   ) {}
 
   get(id: string): JobDto | undefined {
@@ -41,7 +45,7 @@ export class JobService {
     const existing = this.reusableJob(video, "encode", settings);
     if (existing) return { status: existing.status === "completed" ? 200 : 202, job: this.publicJob(existing) };
     const job = this.createEncodeJob(video, settings, "encode");
-    this.execution.runEncode(job, video.storedPath);
+    this.enqueueMediaJob(job, () => this.execution.runEncode(job, video.storedPath));
     return { status: 202, job: this.publicJob(job) };
   }
 
@@ -63,7 +67,7 @@ export class JobService {
     const existing = this.reusableJob(video, "sample", settings);
     if (existing) return { status: existing.status === "completed" ? 200 : 202, job: this.publicJob(existing) };
     const job = this.createEncodeJob(video, settings, "sample", "sample");
-    this.execution.runEncode(job, video.storedPath, sampleSeconds);
+    this.enqueueMediaJob(job, () => this.execution.runEncode(job, video.storedPath, sampleSeconds));
     return { status: 202, job: this.publicJob(job) };
   }
 
@@ -94,7 +98,7 @@ export class JobService {
 
     this.jobs.set(job);
     void this.persistence.save();
-    this.execution.runPoster(job, video.storedPath, atSeconds);
+    this.enqueueMediaJob(job, () => this.execution.runPoster(job, video.storedPath, atSeconds));
     return this.publicJob(job);
   }
 
@@ -143,8 +147,9 @@ export class JobService {
     const existingModern = this.reusableJob(video, "encode", modern);
     const fallbackJob = existingFallback ?? this.createEncodeJob(video, fallback, "encode", "fallback-h264");
     const modernJob = existingModern ?? this.createEncodeJob(video, modern, "encode", "modern-av1");
-    if (!existingFallback) this.execution.runEncode(fallbackJob, video.storedPath);
-    if (!existingModern) this.execution.runEncode(modernJob, video.storedPath);
+    if (!existingFallback)
+      this.enqueueMediaJob(fallbackJob, () => this.execution.runEncode(fallbackJob, video.storedPath));
+    if (!existingModern) this.enqueueMediaJob(modernJob, () => this.execution.runEncode(modernJob, video.storedPath));
     return { jobs: [this.publicJob(fallbackJob), this.publicJob(modernJob)] };
   }
 
@@ -163,9 +168,8 @@ export class JobService {
     const job = this.jobs.get(id);
     if (!job) return undefined;
     if (job.status !== "running" && job.status !== "queued") return this.publicJob(job);
-    job.status = "canceled";
-    job.message = "Canceled and removed";
-    job.completedAt = new Date().toISOString();
+    if (job.status === "queued") this.scheduler.cancelQueued(job.id);
+    this.lifecycle.cancel(job, "Canceled and removed");
     const responseJob = this.publicJob(job);
     await this.cleanup.removeJob(job);
     await this.persistence.save();
@@ -258,5 +262,19 @@ export class JobService {
 
   private matchingSettings(a: OptimizationSettings, b: OptimizationSettings): boolean {
     return JSON.stringify(a) === JSON.stringify(b);
+  }
+
+  private enqueueMediaJob(job: JobEntity, run: () => Promise<void>): void {
+    this.scheduler.enqueue({
+      jobId: job.id,
+      run,
+      onUnhandledError: async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.lifecycle.fail(job, message)) {
+          await this.cleanup.removeJobArtifacts(job);
+          await this.persistence.save();
+        }
+      }
+    });
   }
 }

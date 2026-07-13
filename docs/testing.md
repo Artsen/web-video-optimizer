@@ -125,6 +125,13 @@ The initial unit tests cover pure behavior extracted from the current API and we
 - Package-service tests for package validation, selected output reading, generated archive entry names, transcript
   creation, caption-noise removal, package job completion fields, output size, persistence, and DTO privacy
 - Package helper tests for API-private ZIP, HTML, JSON, duration, transcript, and caption-cleaning helpers
+- Scheduler unit tests for the runtime-scoped FIFO media queue using deferred promises rather than timers or polling
+- Lifecycle tests for valid and invalid job-status transitions, progress bounds, completion/failure/cancellation
+  timestamps, and protection from late terminal process events
+- Service scheduling tests proving encode, sample, poster, subtitle, and mux jobs consume media slots while package jobs
+  remain outside the media scheduler
+- Fake-process concurrency tests proving only the configured number of FFmpeg/Whisper workflows start, queued work waits,
+  cancellation prevents queued callbacks, and slots are released after success, failure, spawn error, and cancellation
 
 The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
 argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
@@ -134,6 +141,11 @@ Fast process-backed unit tests use `apps/api/src/infrastructure/processes/test/f
 command names, argument arrays, spawn options, stdout/stderr chunks, close events, error events, `kill`, and `unref`
 without launching real programs. Service tests should use temporary directories for filesystem behavior and fakes for
 tool/process boundaries unless they are explicitly marked as real-media integration tests.
+
+Scheduler tests are intentionally separate from real FFmpeg verification. Unit tests use deferred promises to control
+queue order deterministically. Fake-process tests verify repository state, process registry behavior, and lifecycle
+settlement without launching external tools. Real-media smoke tests should use generated fixtures and
+`MAX_CONCURRENT_MEDIA_JOBS=1` to prove an actual second encode remains queued until the first process finishes.
 
 Archive tests use a small test-only ZIP entry-name reader to verify generated package structure without adding a
 production ZIP dependency. Caption and execution tests use fake process sequences; real Whisper/FFmpeg behavior remains
@@ -153,6 +165,7 @@ records, and keeping public DTOs free of private paths and hashes.
 - Full production-runtime route integration
 - Real multipart upload storage through the production HTTP server
 - Real FFmpeg process execution
+- Automated real-media queue smoke tests
 - Browser rendering behavior
 - End-to-end package ZIP validation with real media
 - Subtitle generation through whisper.cpp

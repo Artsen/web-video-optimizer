@@ -17,8 +17,10 @@ import type { ProcessRunner } from "../infrastructure/processes/process-runner.j
 import type { WhisperAdapter } from "../infrastructure/tools/whisper-adapter.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { CaptionPayload } from "../runtime/api-runtime.js";
+import type { JobScheduler } from "../scheduling/job-scheduler.js";
 import type { CleanupService } from "./cleanup-service.js";
 import { buildMuxSubtitleArgs, type JobExecutor } from "./job-execution-service.js";
+import type { JobLifecycle } from "./job-lifecycle-service.js";
 import type { JobService } from "./job-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
 import { commandPreview, commandPreviewFor } from "./helpers/command-preview.js";
@@ -36,7 +38,9 @@ export class CaptionService {
     private readonly jobService: JobService,
     private readonly outputDir: string,
     private readonly tmpDir: string,
-    private readonly whisperModel?: string
+    private readonly whisperModel: string | undefined,
+    private readonly scheduler: JobScheduler,
+    private readonly lifecycle: JobLifecycle
   ) {}
 
   createSubtitleJob(videoId: string): { status: 200 | 202 | 400 | 404; job?: JobDto; error?: string } {
@@ -57,7 +61,7 @@ export class CaptionService {
     if (existing)
       return { status: existing.status === "completed" ? 200 : 202, job: this.jobService.publicJob(existing) };
     const job = this.createSubtitleEntity(video);
-    void this.runSubtitleJob(job, video.storedPath);
+    this.enqueueMediaJob(job, () => this.runSubtitleJob(job, video.storedPath));
     return { status: 202, job: this.jobService.publicJob(job) };
   }
 
@@ -115,11 +119,11 @@ export class CaptionService {
     }
 
     const job = this.createMuxEntity(video, videoJob, subtitleJob);
-    this.execution.runMux(job, videoJob, subtitleJob);
+    this.enqueueMediaJob(job, () => this.execution.runMux(job, videoJob, subtitleJob));
     return { status: 202, job: this.jobService.publicJob(job) };
   }
 
-  detectLeadingSilence(inputPath: string): Promise<number> {
+  detectLeadingSilence(inputPath: string, jobId?: string): Promise<number> {
     return new Promise((resolve) => {
       const args = [
         "-hide_banner",
@@ -133,13 +137,18 @@ export class CaptionService {
         "-"
       ];
       const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
+      if (jobId) this.processRegistry.set(jobId, child);
       let stderr = "";
 
       child.stderr?.on("data", (chunk) => {
         stderr += String(chunk);
       });
-      child.on("error", () => resolve(0));
+      child.on("error", () => {
+        if (jobId) this.processRegistry.delete(jobId);
+        resolve(0);
+      });
       child.on("close", () => {
+        if (jobId) this.processRegistry.delete(jobId);
         const firstStart = stderr.match(/silence_start:\s*([0-9.]+)/);
         const firstEnd = stderr.match(/silence_end:\s*([0-9.]+)/);
         const silenceStart = firstStart ? Number(firstStart[1]) : undefined;
@@ -220,39 +229,36 @@ export class CaptionService {
   }
 
   private async runSubtitleJob(job: JobEntity, inputPath: string): Promise<void> {
+    if (!this.lifecycle.start(job, "Checking leading silence")) return;
+
     const whisperCommand = await this.whisperAdapter.resolveCommand();
     const whisperModel = this.whisperModel;
     const audioPath = path.join(this.tmpDir, `${job.id}-subtitle.wav`);
     const outputBasePath = job.outputPath!.replace(/\.vtt$/i, "");
 
-    job.status = "running";
     job.progress = 3;
-    job.message = "Checking leading silence";
+    await this.persistence.save();
 
     if (!whisperCommand) {
-      job.status = "failed";
-      job.message = "whisper.cpp executable was not found. Set WHISPER_CPP_BIN or add whisper-cli to PATH.";
-      job.completedAt = new Date().toISOString();
-      void this.cleanup.removeJobArtifacts(job);
-      void this.persistence.save();
+      this.lifecycle.fail(job, "whisper.cpp executable was not found. Set WHISPER_CPP_BIN or add whisper-cli to PATH.");
+      await this.cleanup.removeJobArtifacts(job);
+      await this.persistence.save();
       return;
     }
 
     if (!whisperModel) {
-      job.status = "failed";
-      job.message = "WHISPER_CPP_MODEL is not configured";
-      job.completedAt = new Date().toISOString();
-      void this.cleanup.removeJobArtifacts(job);
-      void this.persistence.save();
+      this.lifecycle.fail(job, "WHISPER_CPP_MODEL is not configured");
+      await this.cleanup.removeJobArtifacts(job);
+      await this.persistence.save();
       return;
     }
 
-    const leadingSilenceSeconds = await this.detectLeadingSilence(inputPath);
-    if (this.jobs.get(job.id)?.status === "canceled") {
+    const leadingSilenceSeconds = await this.detectLeadingSilence(inputPath, job.id);
+    if (job.status === "canceled" || !this.jobs.get(job.id)) {
       job.progress = 0;
       job.message = "Canceled";
       job.completedAt = new Date().toISOString();
-      void this.persistence.save();
+      await this.persistence.save();
       return;
     }
     const extractArgs = [
@@ -279,100 +285,135 @@ export class CaptionService {
     job.ffmpegCommand = `${commandPreview(extractArgs)} && ${commandPreviewFor(whisperCommand, whisperArgs)}`;
     void this.persistence.save();
 
-    const extractor = this.processRunner["spawn"]("ffmpeg", extractArgs, { windowsHide: true });
-    this.processRegistry.set(job.id, extractor);
-
-    extractor.on("error", (error) => {
-      job.status = "failed";
-      job.message = error.message;
-      job.completedAt = new Date().toISOString();
-      this.processRegistry.delete(job.id);
-      void this.cleanup.removeJobArtifacts(job);
-      void this.persistence.save();
-    });
-
-    extractor.on("close", (code) => {
-      if (job.status === "canceled") {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let extractionFinished = false;
+      const settle = async (handler: () => Promise<void>) => {
+        if (settled) return;
+        settled = true;
         this.processRegistry.delete(job.id);
-        void fs.promises.rm(audioPath, { force: true });
-        void this.persistence.save();
-        return;
-      }
-      if (code !== 0) {
-        job.status = "failed";
-        job.message = `Audio extraction exited with code ${code}`;
-        job.completedAt = new Date().toISOString();
-        this.processRegistry.delete(job.id);
-        void this.cleanup.removeJobArtifacts(job);
-        void this.persistence.save();
-        return;
-      }
-
-      job.progress = 35;
-      job.message = "Transcribing speech with whisper.cpp";
-      const whisper = this.processRunner["spawn"](whisperCommand, whisperArgs, { windowsHide: true });
-      this.processRegistry.set(job.id, whisper);
-
-      whisper.stderr?.on("data", (chunk) => {
-        const text = String(chunk).trim();
-        if (text && job.status === "running") {
-          job.message = text.split("\n").at(-1)?.slice(0, 220) || job.message;
+        try {
+          await handler();
+        } finally {
+          resolve();
         }
-      });
+      };
 
-      whisper.on("error", (error) => {
-        job.status = "failed";
-        job.message = error.message;
-        job.completedAt = new Date().toISOString();
-        this.processRegistry.delete(job.id);
-        void fs.promises.rm(audioPath, { force: true });
-        void this.cleanup.removeJobArtifacts(job);
-        void this.persistence.save();
-      });
+      const extractor = this.processRunner["spawn"]("ffmpeg", extractArgs, { windowsHide: true });
+      this.processRegistry.set(job.id, extractor);
 
-      whisper.on("close", async (whisperCode) => {
-        this.processRegistry.delete(job.id);
-        await fs.promises.rm(audioPath, { force: true });
-        job.completedAt = new Date().toISOString();
-        if (job.status === "canceled") {
-          job.progress = 0;
-          job.message = "Canceled";
-          void this.persistence.save();
-          return;
-        }
-        if (whisperCode !== 0) {
-          job.status = "failed";
-          job.message = `whisper.cpp exited with code ${whisperCode}`;
-          await this.cleanup.removeJobArtifacts(job);
-          void this.persistence.save();
-          return;
-        }
-        if (!fs.existsSync(job.outputPath!)) {
-          job.status = "failed";
-          job.message = "whisper.cpp did not create a VTT file";
-          await this.cleanup.removeJobArtifacts(job);
-          void this.persistence.save();
-          return;
-        }
-
-        if (leadingSilenceSeconds > 0) {
-          const vtt = await fs.promises.readFile(job.outputPath!, "utf8");
-          await fs.promises.writeFile(job.outputPath!, shiftCaptionTimings(vtt, leadingSilenceSeconds));
-          if (job.sidecarPath && fs.existsSync(job.sidecarPath)) {
-            const srt = await fs.promises.readFile(job.sidecarPath, "utf8");
-            await fs.promises.writeFile(job.sidecarPath, shiftCaptionTimings(srt, leadingSilenceSeconds));
+      extractor.on("error", (error) => {
+        if (extractionFinished) return;
+        void settle(async () => {
+          if (this.lifecycle.fail(job, error.message)) {
+            await this.cleanup.removeJobArtifacts(job);
+            await this.persistence.save();
           }
+        });
+      });
+
+      extractor.on("close", (code) => {
+        if (settled) return;
+        extractionFinished = true;
+        this.processRegistry.delete(job.id);
+        if (job.status === "canceled") {
+          void settle(async () => {
+            job.progress = 0;
+            job.message = "Canceled";
+            await fs.promises.rm(audioPath, { force: true });
+            await this.persistence.save();
+          });
+          return;
+        }
+        if (code !== 0) {
+          void settle(async () => {
+            if (this.lifecycle.fail(job, `Audio extraction exited with code ${code}`)) {
+              await this.cleanup.removeJobArtifacts(job);
+              await this.persistence.save();
+            }
+          });
+          return;
         }
 
-        job.status = "completed";
-        job.progress = 100;
-        job.message =
-          leadingSilenceSeconds > 0
-            ? `Subtitles generated with ${leadingSilenceSeconds.toFixed(2)}s leading-silence compensation`
-            : "Subtitles generated";
-        job.outputSize = (await stat(job.outputPath!)).size;
-        void this.persistence.save();
+        this.lifecycle.updateProgress(job, 35, "Transcribing speech with whisper.cpp");
+        const whisper = this.processRunner["spawn"](whisperCommand, whisperArgs, { windowsHide: true });
+        this.processRegistry.set(job.id, whisper);
+
+        whisper.stderr?.on("data", (chunk) => {
+          const text = String(chunk).trim();
+          if (text && job.status === "running") {
+            job.message = text.split("\n").at(-1)?.slice(0, 220) || job.message;
+          }
+        });
+
+        whisper.on("error", (error) => {
+          void settle(async () => {
+            if (this.lifecycle.fail(job, error.message)) {
+              await fs.promises.rm(audioPath, { force: true });
+              await this.cleanup.removeJobArtifacts(job);
+              await this.persistence.save();
+            }
+          });
+        });
+
+        whisper.on("close", (whisperCode) => {
+          void settle(async () => {
+            await fs.promises.rm(audioPath, { force: true });
+            if (job.status === "canceled") {
+              job.progress = 0;
+              job.message = "Canceled";
+              await this.persistence.save();
+              return;
+            }
+            if (whisperCode !== 0) {
+              if (this.lifecycle.fail(job, `whisper.cpp exited with code ${whisperCode}`)) {
+                await this.cleanup.removeJobArtifacts(job);
+                await this.persistence.save();
+              }
+              return;
+            }
+            if (!fs.existsSync(job.outputPath!)) {
+              if (this.lifecycle.fail(job, "whisper.cpp did not create a VTT file")) {
+                await this.cleanup.removeJobArtifacts(job);
+                await this.persistence.save();
+              }
+              return;
+            }
+
+            if (leadingSilenceSeconds > 0) {
+              const vtt = await fs.promises.readFile(job.outputPath!, "utf8");
+              await fs.promises.writeFile(job.outputPath!, shiftCaptionTimings(vtt, leadingSilenceSeconds));
+              if (job.sidecarPath && fs.existsSync(job.sidecarPath)) {
+                const srt = await fs.promises.readFile(job.sidecarPath, "utf8");
+                await fs.promises.writeFile(job.sidecarPath, shiftCaptionTimings(srt, leadingSilenceSeconds));
+              }
+            }
+
+            const message =
+              leadingSilenceSeconds > 0
+                ? `Subtitles generated with ${leadingSilenceSeconds.toFixed(2)}s leading-silence compensation`
+                : "Subtitles generated";
+            if (this.lifecycle.complete(job, message)) {
+              job.outputSize = (await stat(job.outputPath!)).size;
+              await this.persistence.save();
+            }
+          });
+        });
       });
+    });
+  }
+
+  private enqueueMediaJob(job: JobEntity, run: () => Promise<void>): void {
+    this.scheduler.enqueue({
+      jobId: job.id,
+      run,
+      onUnhandledError: async (error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (this.lifecycle.fail(job, message)) {
+          await this.cleanup.removeJobArtifacts(job);
+          await this.persistence.save();
+        }
+      }
     });
   }
 }

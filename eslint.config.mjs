@@ -79,13 +79,44 @@ export default tseslint.config(
     }
   },
   {
+    files: ["apps/api/src/scheduling/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "multer", "react", "react-dom", "node:child_process"],
+          patterns: [
+            "../routes/**",
+            "../dto/**",
+            "../repositories/**",
+            "../persistence/**",
+            "../services/**",
+            "../infrastructure/**"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/services/job-lifecycle-service.ts", "apps/api/src/services/job-lifecycle-service.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "multer", "react", "react-dom", "node:child_process"]
+        }
+      ]
+    }
+  },
+  {
     files: [
       "apps/api/src/*.ts",
       "apps/api/src/runtime/**/*.ts",
       "apps/api/src/repositories/**/*.ts",
       "apps/api/src/persistence/**/*.ts",
       "apps/api/src/entities/**/*.ts",
-      "apps/api/src/dto/**/*.ts"
+      "apps/api/src/dto/**/*.ts",
+      "apps/api/src/scheduling/**/*.ts"
     ],
     rules: {
       "no-restricted-imports": [
@@ -155,7 +186,13 @@ export default tseslint.config(
     rules: {
       ...react.configs.flat.recommended.rules,
       ...react.configs.flat["jsx-runtime"].rules,
-      ...reactHooks.configs.recommended.rules
+      ...reactHooks.configs.recommended.rules,
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: ["../../api/src/scheduling/**", "../../api/src/services/**"]
+        }
+      ]
     }
   }
 );

@@ -5,6 +5,7 @@ import type { JobEntity } from "../entities/job-entity.js";
 import type { VideoEntity } from "../entities/video-entity.js";
 import type { ProcessRegistry } from "../infrastructure/processes/process-registry.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
+import type { QueuedTaskCanceler } from "../scheduling/job-scheduler.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
 
 const removeOptions = { force: true, maxRetries: 5, retryDelay: 150 };
@@ -15,7 +16,8 @@ export class CleanupService {
     private readonly jobs: JobRepository,
     private readonly processRegistry: ProcessRegistry,
     private readonly persistence: StatePersistenceService,
-    private readonly directories: { uploadDir: string; outputDir: string; tmpDir: string }
+    private readonly directories: { uploadDir: string; outputDir: string; tmpDir: string },
+    private readonly queuedTasks?: QueuedTaskCanceler
   ) {}
 
   async removeJobArtifacts(job: JobEntity): Promise<void> {
@@ -24,6 +26,7 @@ export class CleanupService {
   }
 
   async removeJob(job: JobEntity): Promise<void> {
+    this.queuedTasks?.cancelQueued(job.id);
     this.processRegistry.get(job.id)?.kill("SIGTERM");
     this.processRegistry.delete(job.id);
     await this.removeJobArtifacts(job);

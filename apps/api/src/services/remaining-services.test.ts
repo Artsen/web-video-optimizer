@@ -12,9 +12,11 @@ import type { FileRevealer } from "../infrastructure/desktop/file-revealer.js";
 import type { WhisperAdapter } from "../infrastructure/tools/whisper-adapter.js";
 import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
 import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
+import { InMemoryJobScheduler } from "../scheduling/in-memory-job-scheduler.js";
 import { CaptionService } from "./caption-service.js";
 import { CleanupService } from "./cleanup-service.js";
 import { buildMuxSubtitleArgs, JobExecutionService, type JobExecutor } from "./job-execution-service.js";
+import { JobLifecycleService } from "./job-lifecycle-service.js";
 import { JobService } from "./job-service.js";
 import { PackageService } from "./package-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
@@ -40,15 +42,15 @@ class FakeExecution implements JobExecutor {
   posterCalls: Array<{ job: JobEntity; inputPath: string; atSeconds: number }> = [];
   muxCalls: Array<{ job: JobEntity; videoJob: JobEntity; subtitleJob: JobEntity }> = [];
 
-  runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): void {
+  async runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): Promise<void> {
     this.encodeCalls.push({ job, inputPath, durationLimitSeconds });
   }
 
-  runPoster(job: JobEntity, inputPath: string, atSeconds: number): void {
+  async runPoster(job: JobEntity, inputPath: string, atSeconds: number): Promise<void> {
     this.posterCalls.push({ job, inputPath, atSeconds });
   }
 
-  runMux(job: JobEntity, videoJob: JobEntity, subtitleJob: JobEntity): void {
+  async runMux(job: JobEntity, videoJob: JobEntity, subtitleJob: JobEntity): Promise<void> {
     this.muxCalls.push({ job, videoJob, subtitleJob });
   }
 }
@@ -160,15 +162,34 @@ function makeJobService(root: string) {
   const jobs = new InMemoryJobRepository();
   const persistence = new FakePersistence();
   const registry = new InMemoryProcessRegistry();
-  const cleanup = new CleanupService(videos, jobs, registry, persistence, {
-    uploadDir: path.join(root, "uploads"),
-    outputDir: path.join(root, "outputs"),
-    tmpDir: path.join(root, "tmp")
-  });
+  const scheduler = new InMemoryJobScheduler(10);
+  const lifecycle = new JobLifecycleService();
+  const cleanup = new CleanupService(
+    videos,
+    jobs,
+    registry,
+    persistence,
+    {
+      uploadDir: path.join(root, "uploads"),
+      outputDir: path.join(root, "outputs"),
+      tmpDir: path.join(root, "tmp")
+    },
+    scheduler
+  );
   const execution = new FakeExecution();
   const revealer = new FakeRevealer();
-  const service = new JobService(videos, jobs, path.join(root, "outputs"), persistence, cleanup, execution, revealer);
-  return { videos, jobs, persistence, registry, cleanup, execution, revealer, service };
+  const service = new JobService(
+    videos,
+    jobs,
+    path.join(root, "outputs"),
+    persistence,
+    cleanup,
+    execution,
+    revealer,
+    scheduler,
+    lifecycle
+  );
+  return { videos, jobs, persistence, registry, cleanup, execution, revealer, service, scheduler, lifecycle };
 }
 
 afterEach(async () => {
@@ -269,12 +290,21 @@ describe("JobExecutionService", () => {
     const runner = new FakeProcessRunner();
     const registry = new InMemoryProcessRegistry();
     const persistence = new FakePersistence();
-    const cleanup = new CleanupService(videos, jobs, registry, persistence, {
-      uploadDir: path.join(root, "uploads"),
-      outputDir: path.join(root, "outputs"),
-      tmpDir: path.join(root, "tmp")
-    });
-    const service = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup);
+    const scheduler = new InMemoryJobScheduler(10);
+    const lifecycle = new JobLifecycleService();
+    const cleanup = new CleanupService(
+      videos,
+      jobs,
+      registry,
+      persistence,
+      {
+        uploadDir: path.join(root, "uploads"),
+        outputDir: path.join(root, "outputs"),
+        tmpDir: path.join(root, "tmp")
+      },
+      scheduler
+    );
+    const service = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
     const source = video(root);
     const output = job(root, { status: "queued", progress: 0, kind: "sample" });
     videos.set(source);
@@ -307,12 +337,21 @@ describe("JobExecutionService", () => {
     const runner = new FakeProcessRunner();
     const registry = new InMemoryProcessRegistry();
     const persistence = new FakePersistence();
-    const cleanup = new CleanupService(videos, jobs, registry, persistence, {
-      uploadDir: path.join(root, "uploads"),
-      outputDir: path.join(root, "outputs"),
-      tmpDir: path.join(root, "tmp")
-    });
-    const service = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup);
+    const scheduler = new InMemoryJobScheduler(10);
+    const lifecycle = new JobLifecycleService();
+    const cleanup = new CleanupService(
+      videos,
+      jobs,
+      registry,
+      persistence,
+      {
+        uploadDir: path.join(root, "uploads"),
+        outputDir: path.join(root, "outputs"),
+        tmpDir: path.join(root, "tmp")
+      },
+      scheduler
+    );
+    const service = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
     const source = video(root);
     videos.set(source);
 
@@ -340,7 +379,13 @@ describe("JobExecutionService", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(canceled).toMatchObject({ progress: 0, message: "Canceled" });
 
-    const poster = job(root, { id: "poster", kind: "poster", outputPath: path.join(root, "outputs", "poster.webp") });
+    const poster = job(root, {
+      id: "poster",
+      kind: "poster",
+      status: "queued",
+      progress: 0,
+      outputPath: path.join(root, "outputs", "poster.webp")
+    });
     service.runPoster(poster, source.storedPath, 1.5);
     expect(runner.calls.at(-1)?.args).toEqual([
       "-y",
@@ -391,11 +436,20 @@ describe("CaptionService", () => {
     const runner = new FakeProcessRunner();
     const registry = new InMemoryProcessRegistry();
     const persistence = new FakePersistence();
-    const cleanup = new CleanupService(videos, jobs, registry, persistence, {
-      uploadDir: path.join(root, "uploads"),
-      outputDir: path.join(root, "outputs"),
-      tmpDir: path.join(root, "tmp")
-    });
+    const scheduler = new InMemoryJobScheduler(10);
+    const lifecycle = new JobLifecycleService();
+    const cleanup = new CleanupService(
+      videos,
+      jobs,
+      registry,
+      persistence,
+      {
+        uploadDir: path.join(root, "uploads"),
+        outputDir: path.join(root, "outputs"),
+        tmpDir: path.join(root, "tmp")
+      },
+      scheduler
+    );
     const execution = new FakeExecution();
     const jobService = new JobService(
       videos,
@@ -404,7 +458,9 @@ describe("CaptionService", () => {
       persistence,
       cleanup,
       execution,
-      new FakeRevealer()
+      new FakeRevealer(),
+      scheduler,
+      lifecycle
     );
     const service = new CaptionService(
       videos,
@@ -417,7 +473,10 @@ describe("CaptionService", () => {
       execution,
       jobService,
       path.join(root, "outputs"),
-      path.join(root, "tmp")
+      path.join(root, "tmp"),
+      undefined,
+      scheduler,
+      lifecycle
     );
 
     expect(service.createSubtitleJob("missing")).toEqual({ status: 404, error: "Video not found" });
@@ -445,10 +504,12 @@ describe("CaptionService", () => {
       message: "whisper.cpp executable was not found. Set WHISPER_CPP_BIN or add whisper-cli to PATH."
     });
 
-    const silencePromise = service.detectLeadingSilence(source.storedPath);
+    const silencePromise = service.detectLeadingSilence(source.storedPath, "silence-job");
+    expect(registry.get("silence-job")).toBeDefined();
     runner.latest().emitStderr("silence_start: 0\nsilence_end: 4.1234");
     runner.latest().emitClose(0);
     await expect(silencePromise).resolves.toBe(4.123);
+    expect(registry.get("silence-job")).toBeUndefined();
   });
 
   it("updates captions, generates missing SRT, and validates mux creation", async () => {
@@ -458,11 +519,20 @@ describe("CaptionService", () => {
     const runner = new FakeProcessRunner();
     const registry = new InMemoryProcessRegistry();
     const persistence = new FakePersistence();
-    const cleanup = new CleanupService(videos, jobs, registry, persistence, {
-      uploadDir: path.join(root, "uploads"),
-      outputDir: path.join(root, "outputs"),
-      tmpDir: path.join(root, "tmp")
-    });
+    const scheduler = new InMemoryJobScheduler(10);
+    const lifecycle = new JobLifecycleService();
+    const cleanup = new CleanupService(
+      videos,
+      jobs,
+      registry,
+      persistence,
+      {
+        uploadDir: path.join(root, "uploads"),
+        outputDir: path.join(root, "outputs"),
+        tmpDir: path.join(root, "tmp")
+      },
+      scheduler
+    );
     const execution = new FakeExecution();
     const jobService = new JobService(
       videos,
@@ -471,7 +541,9 @@ describe("CaptionService", () => {
       persistence,
       cleanup,
       execution,
-      new FakeRevealer()
+      new FakeRevealer(),
+      scheduler,
+      lifecycle
     );
     const service = new CaptionService(
       videos,
@@ -485,7 +557,9 @@ describe("CaptionService", () => {
       jobService,
       path.join(root, "outputs"),
       path.join(root, "tmp"),
-      "model.bin"
+      "model.bin",
+      scheduler,
+      lifecycle
     );
     const source = video(root);
     videos.set(source);
