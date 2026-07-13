@@ -11,18 +11,16 @@ import multer from "multer";
 import { nanoid } from "nanoid";
 import type { JobDto, JobKind, OptimizationSettings, VideoRecordDto } from "@local-video-optimizer/contracts";
 import {
-  analyzeWebFriendliness,
   assertLooksLikeVtt,
   buildFfmpegArgs,
-  defaultSettings,
-  parseByteRange,
-  parseNumber,
-  parseRate,
+  normalizeOptimizationSettings,
+  normalizeProbe,
   sanitizeFileName,
   shiftCaptionTimings,
   vttToSrt
-} from "./video-domain.js";
-import type { FFprobeResult, FFprobeStream, VideoMetadata } from "./video-domain.js";
+} from "@local-video-optimizer/video-core";
+import type { FFprobeResult } from "@local-video-optimizer/video-core";
+import { parseByteRange } from "./http-byte-range.js";
 
 const mkdir = promisify(fs.mkdir);
 const rm = promisify(fs.rm);
@@ -279,61 +277,6 @@ async function loadManifest(): Promise<void> {
       console.warn("Unable to load manifest:", error);
     }
   }
-}
-
-function findRotation(stream?: FFprobeStream): string | undefined {
-  const rotateTag = stream?.tags?.rotate;
-  if (rotateTag) return `${rotateTag}deg`;
-
-  const sideData = stream?.side_data_list?.find((item) => "rotation" in item);
-  const rotation = sideData?.rotation;
-  return typeof rotation === "number" ? `${rotation}deg` : undefined;
-}
-
-function normalizeProbe(fileName: string, probe: FFprobeResult): VideoMetadata {
-  const streams = probe.streams ?? [];
-  const videoStreams = streams.filter((stream) => stream.codec_type === "video");
-  const audioStreams = streams.filter((stream) => stream.codec_type === "audio");
-  const subtitleStreams = streams.filter((stream) => stream.codec_type === "subtitle");
-  const primaryVideo = videoStreams[0];
-  const primaryAudio = audioStreams[0];
-
-  const base = {
-    fileName,
-    fileSize: parseNumber(probe.format?.size) ?? 0,
-    durationSeconds: parseNumber(probe.format?.duration) ?? 0,
-    container: probe.format?.format_name ?? "unknown",
-    formatLongName: probe.format?.format_long_name,
-    videoCodec: primaryVideo?.codec_name,
-    audioCodec: primaryAudio?.codec_name,
-    trackCounts: {
-      video: videoStreams.length,
-      audio: audioStreams.length,
-      subtitle: subtitleStreams.length
-    },
-    width: primaryVideo?.width,
-    height: primaryVideo?.height,
-    displayAspectRatio: primaryVideo?.display_aspect_ratio,
-    frameRate: parseRate(primaryVideo?.avg_frame_rate ?? primaryVideo?.r_frame_rate),
-    overallBitrate: parseNumber(probe.format?.bit_rate),
-    videoBitrate: parseNumber(primaryVideo?.bit_rate),
-    audioBitrate: parseNumber(primaryAudio?.bit_rate),
-    audioSampleRate: parseNumber(primaryAudio?.sample_rate),
-    audioChannels: primaryAudio?.channels,
-    pixelFormat: primaryVideo?.pix_fmt,
-    color: {
-      space: primaryVideo?.color_space,
-      transfer: primaryVideo?.color_transfer,
-      primaries: primaryVideo?.color_primaries
-    },
-    rotation: findRotation(primaryVideo),
-    tags: probe.format?.tags
-  };
-
-  return {
-    ...base,
-    ...analyzeWebFriendliness(base)
-  };
 }
 
 async function runJsonCommand(command: string, args: string[]): Promise<unknown> {
@@ -755,7 +698,7 @@ function createSubtitleJob(video: VideoRecord): Job {
   const outputBasePath = path.join(outputDir, `${jobId}-${baseName}`);
   const outputPath = `${outputBasePath}.vtt`;
   const sidecarPath = `${outputBasePath}.srt`;
-  const settings = defaultSettings({ outputFilename: baseName });
+  const settings = normalizeOptimizationSettings({ outputFilename: baseName });
   const job: Job = {
     id: jobId,
     videoId: video.id,
@@ -822,7 +765,7 @@ function createMuxJob(video: VideoRecord, videoJob: Job, subtitleJob: Job): Job 
   const baseName = sanitizeFileName(`${parsed.name || path.parse(video.originalName).name}-captioned`);
   const outputFileName = `${baseName}${extension}`;
   const outputPath = path.join(outputDir, `${jobId}-${outputFileName}`);
-  const settings = defaultSettings({ ...videoJob.settings, outputFilename: baseName });
+  const settings = normalizeOptimizationSettings({ ...videoJob.settings, outputFilename: baseName });
   const args = buildMuxSubtitleArgs(
     videoJob.outputPath!,
     subtitleJob.outputPath!,
@@ -1346,7 +1289,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    const settings = defaultSettings(req.body ?? {});
+    const settings = normalizeOptimizationSettings(req.body ?? {});
     const existing = reusableJob(video, "encode", settings);
     if (existing) {
       res.status(existing.status === "completed" ? 200 : 202).json(publicJob(existing));
@@ -1364,7 +1307,7 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    const settings = defaultSettings({
+    const settings = normalizeOptimizationSettings({
       ...(req.body ?? {}),
       outputFilename: `${path.parse(video.originalName).name}-sample`
     });
@@ -1397,7 +1340,7 @@ async function bootstrap(): Promise<void> {
     const baseName = sanitizeFileName(`${path.parse(video.originalName).name}-poster`);
     const outputFileName = `${baseName}.webp`;
     const outputPath = path.join(outputDir, `${jobId}-${outputFileName}`);
-    const settings = defaultSettings({ outputFilename: baseName });
+    const settings = normalizeOptimizationSettings({ outputFilename: baseName });
     const job: Job = {
       id: jobId,
       videoId: video.id,
@@ -1452,7 +1395,7 @@ async function bootstrap(): Promise<void> {
     }
 
     const base = path.parse(video.originalName).name;
-    const fallback = defaultSettings({
+    const fallback = normalizeOptimizationSettings({
       outputContainer: "mp4",
       videoCodec: "libx264",
       audioCodec: "aac",
@@ -1469,7 +1412,7 @@ async function bootstrap(): Promise<void> {
       stripMetadata: true,
       outputFilename: `${base}-fallback-h264`
     });
-    const modern = defaultSettings({
+    const modern = normalizeOptimizationSettings({
       outputContainer: "webm",
       videoCodec: "libaom-av1",
       audioCodec: "libopus",
@@ -1733,7 +1676,7 @@ ${sources}${track ? `\n${track}` : ""}
 
       const job = createEncodeJob(
         video,
-        defaultSettings({ outputFilename: path.parse(outputFileName).name }),
+        normalizeOptimizationSettings({ outputFilename: path.parse(outputFileName).name }),
         "package",
         "web-package"
       );

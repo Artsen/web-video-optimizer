@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildRecommendations,
-  estimateOutputSize,
-  normalizeOutputContainerChange,
-  normalizeVideoCodecChange
-} from "./video-ui";
+import { buildRecommendations, normalizeOutputContainerChange, normalizeVideoCodecChange } from "./video-ui";
 import type { Settings, VideoMetadata } from "./video-ui";
 
 function metadata(overrides: Partial<VideoMetadata> = {}): VideoMetadata {
@@ -45,29 +40,6 @@ function settings(overrides: Partial<Settings> = {}): Settings {
     ...overrides
   };
 }
-
-describe("estimateOutputSize", () => {
-  it("returns no byte estimate when duration is unknown", () => {
-    expect(estimateOutputSize(metadata({ durationSeconds: 0 }), settings())).toEqual({
-      note: "Estimate unavailable until duration is known."
-    });
-  });
-
-  it("accounts for CRF, resize, frame rate, and audio removal", () => {
-    const estimate = estimateOutputSize(
-      metadata(),
-      settings({
-        width: 1280,
-        frameRate: 24,
-        audioMode: "remove"
-      })
-    );
-
-    expect(estimate.bytes).toBeGreaterThan(0);
-    expect(estimate.bytes).toBeLessThan(20_000_000);
-    expect(estimate.reduction).toBeGreaterThan(0);
-  });
-});
 
 describe("recommendations", () => {
   it("warns about incompatible container and codec choices", () => {

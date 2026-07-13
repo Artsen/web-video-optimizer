@@ -7,6 +7,7 @@ The app has two local services:
 - `apps/web`: React + TypeScript UI served by Vite.
 - `apps/api`: Express API that receives uploads, runs FFprobe/FFmpeg, and streams local files.
 - `packages/contracts`: shared Zod schemas and inferred TypeScript types for public API/browser data.
+- `packages/video-core`: pure media-domain calculations and transformations shared by current and future adapters.
 
 Docker Compose runs both services and installs FFmpeg in the API image.
 
@@ -22,8 +23,20 @@ including stored upload paths, output paths, sidecar paths, process handles, sto
 structures, and Express/Multer objects. Browser-only UI types remain in `apps/web`, including component props, modal
 state, tab/view state, presentation metadata, and React nodes.
 
-Phase 2A establishes the shared contract boundary only. Phase 2B will still need to extract reusable pure video-domain
-logic into a separate package.
+The contracts package defines public data shapes only; reusable media behavior belongs in `packages/video-core`.
+
+## Video Core
+
+`packages/video-core` owns deterministic media-domain behavior such as optimization-setting normalization, FFmpeg
+argument-array construction, FFprobe result normalization, browser-oriented compatibility analysis, filename
+sanitization, caption timestamp/VTT utilities, and output-size estimation. It consumes shared DTO and settings types
+from `packages/contracts` and has no dependency on React, Express, filesystem access, child processes, or environment
+configuration.
+
+The API remains responsible for HTTP routes, byte-range delivery, process execution, FFmpeg/FFprobe/Whisper/yt-dlp
+invocation, storage, job state, manifests, ZIP creation, and persistence. The web app remains responsible for React
+components, presentation wording, form-state behavior, recommendations, and browser UI state. Future CLI and MCP
+adapters should consume `packages/contracts` and `packages/video-core` rather than copying media-domain logic.
 
 Current compatibility note: some API responses still spread internal job or video entities directly, which can expose
 private implementation fields such as absolute filesystem paths. Phase 2A documents that behavior and preserves the

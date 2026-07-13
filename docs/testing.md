@@ -52,6 +52,12 @@ Run only the shared contracts tests:
 npm run test:run --workspace packages/contracts
 ```
 
+Run only the pure video-core tests:
+
+```bash
+npm run test:run --workspace packages/video-core
+```
+
 Run unit tests in watch mode:
 
 ```bash
@@ -75,6 +81,8 @@ npm run check
 The initial unit tests cover pure behavior extracted from the current API and web entry files:
 
 - Shared runtime contract schemas for public API/browser data
+- Pure video-core settings normalization, FFmpeg argument-array construction, FFprobe normalization, compatibility
+  analysis, filename sanitization, caption utilities, and output-size estimation
 - Filename sanitization
 - FFprobe frame-rate and number parsing
 - Web compatibility warning generation
@@ -87,7 +95,9 @@ The initial unit tests cover pure behavior extracted from the current API and we
 - Web export recommendation logic
 - Frontend codec/container compatibility normalization
 
-The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. Those tools are still required for the running application and for future media integration tests, but Phase 1 keeps tests fast and deterministic.
+The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
+argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
+future real-media integration tests.
 
 ## Not Covered Yet
 

@@ -38,6 +38,17 @@ export default tseslint.config(
     }
   },
   {
+    files: ["packages/video-core/src/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "cors", "multer", "react", "react-dom", "node:fs", "node:path", "node:child_process"]
+        }
+      ]
+    }
+  },
+  {
     files: ["apps/web/src/**/*.{ts,tsx}"],
     plugins: {
       react,
