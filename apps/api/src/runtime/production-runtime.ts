@@ -24,10 +24,13 @@ import type { ManifestStore } from "../persistence/manifest-store.js";
 import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
 import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
+import { InMemoryJobScheduler } from "../scheduling/in-memory-job-scheduler.js";
+import type { JobScheduler } from "../scheduling/job-scheduler.js";
 import { CapabilitiesService } from "../services/capabilities-service.js";
 import { CaptionService } from "../services/caption-service.js";
 import { CleanupService } from "../services/cleanup-service.js";
 import { JobExecutionService } from "../services/job-execution-service.js";
+import { JobLifecycleService } from "../services/job-lifecycle-service.js";
 import { JobService } from "../services/job-service.js";
 import { PackageService } from "../services/package-service.js";
 import { ManifestStatePersistenceService } from "../services/state-persistence-service.js";
@@ -48,6 +51,7 @@ export type ProductionRuntimeDependencies = {
   whisperAdapter?: WhisperAdapter;
   videoDownloader?: VideoDownloader;
   fileRevealer?: FileRevealer;
+  jobScheduler?: JobScheduler;
 };
 
 export function createProductionRuntime(
@@ -66,13 +70,22 @@ export function createProductionRuntime(
   const whisperAdapter = dependencies.whisperAdapter ?? new ConfigWhisperAdapter(apiConfig, commandRunner);
   const videoDownloader = dependencies.videoDownloader ?? new YtDlpAdapter(apiConfig, commandRunner, processRunner);
   const fileRevealer = dependencies.fileRevealer ?? new DesktopFileRevealer(processRunner);
+  const jobScheduler = dependencies.jobScheduler ?? new InMemoryJobScheduler(apiConfig.maxConcurrentMediaJobs);
+  const jobLifecycle = new JobLifecycleService();
 
   const statePersistence = new ManifestStatePersistenceService(videoRepository, jobRepository, manifestStore);
-  const cleanupService = new CleanupService(videoRepository, jobRepository, processRegistry, statePersistence, {
-    uploadDir: apiConfig.uploadDir,
-    outputDir: apiConfig.outputDir,
-    tmpDir: apiConfig.tmpDir
-  });
+  const cleanupService = new CleanupService(
+    videoRepository,
+    jobRepository,
+    processRegistry,
+    statePersistence,
+    {
+      uploadDir: apiConfig.uploadDir,
+      outputDir: apiConfig.outputDir,
+      tmpDir: apiConfig.tmpDir
+    },
+    jobScheduler
+  );
   const capabilitiesService = new CapabilitiesService(ffmpegCapabilitiesAdapter, whisperAdapter, videoDownloader);
   const videoService = new VideoService(
     videoRepository,
@@ -90,7 +103,8 @@ export function createProductionRuntime(
     videoRepository,
     jobRepository,
     statePersistence,
-    cleanupService
+    cleanupService,
+    jobLifecycle
   );
   const jobService = new JobService(
     videoRepository,
@@ -99,7 +113,9 @@ export function createProductionRuntime(
     statePersistence,
     cleanupService,
     jobExecutionService,
-    fileRevealer
+    fileRevealer,
+    jobScheduler,
+    jobLifecycle
   );
   const captionService = new CaptionService(
     videoRepository,
@@ -113,7 +129,9 @@ export function createProductionRuntime(
     jobService,
     apiConfig.outputDir,
     apiConfig.tmpDir,
-    apiConfig.whisperCppModel
+    apiConfig.whisperCppModel,
+    jobScheduler,
+    jobLifecycle
   );
   const packageService = new PackageService(
     videoRepository,

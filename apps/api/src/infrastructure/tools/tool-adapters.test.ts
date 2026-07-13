@@ -18,6 +18,7 @@ function config(overrides: Partial<ApiConfig> = {}): ApiConfig {
     tmpDir: "data/tmp",
     manifestPath: "data/manifest.json",
     uploadFileSizeLimitBytes: 123,
+    maxConcurrentMediaJobs: 1,
     ytDlpJsRuntime: "node:C:\\Program Files\\nodejs\\node.exe",
     ...overrides
   };

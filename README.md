@@ -84,6 +84,14 @@ Run the API:
 npm run dev:api
 ```
 
+By default, the API runs one process-backed media job at a time. This keeps local CPU usage predictable for encodes,
+poster generation, subtitle generation, and muxing. To allow more concurrent media jobs, set:
+
+```powershell
+$env:MAX_CONCURRENT_MEDIA_JOBS="2"
+npm.cmd run dev:api
+```
+
 Run the web app in another terminal:
 
 ```bash

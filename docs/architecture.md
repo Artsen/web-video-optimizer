@@ -68,18 +68,32 @@ Process creation is behind `ProcessRunner`, with the Node implementation isolate
 runtime-scoped `ProcessRegistry`. Tool-specific behavior is behind infrastructure adapters for FFprobe, FFmpeg encoder
 capability detection, whisper.cpp resolution, yt-dlp importing, and desktop file reveal behavior.
 
+Process-backed media jobs are admitted through a runtime-scoped bounded FIFO scheduler. `MAX_CONCURRENT_MEDIA_JOBS`
+controls the number of concurrent media slots and defaults to `1`, because local video encoding is CPU-intensive.
+Encode, sample, poster, subtitle generation, and subtitle mux jobs consume scheduler slots. Website package jobs remain
+outside the media scheduler because package creation reads completed files and assembles a ZIP without spawning FFmpeg,
+Whisper, or another media process.
+
+Job lifecycle transitions are explicit API-private behavior. Valid transitions are `queued -> running`,
+`queued -> canceled`, `queued -> failed`, `running -> completed`, `running -> failed`, and `running -> canceled`.
+Terminal jobs cannot be rewritten by late process events. The scheduler controls capacity only; services and lifecycle
+helpers own repository state, progress, cancellation, artifact cleanup, and persistence calls.
+
 Application services own API-private workflows:
 
 - `StatePersistenceService`: manifest load/save policy, including restart cancellation normalization.
-- `CleanupService`: job artifact deletion, active-process termination, video deletion cascades, and orphan pruning.
+- `CleanupService`: queued-task cancellation, job artifact deletion, active-process termination, video deletion cascades,
+  and orphan pruning.
 - `VideoService`: upload/import storage, content hashing, duplicate detection, metadata probing, rename, source
   descriptors, downloads, and video deletion delegation.
 - `JobService`: job lookup, optimization/sample/poster/pair creation, reuse policy, descriptors, rename, cancellation,
-  deletion, reveal delegation, and public job DTO mapping.
+  deletion, scheduler enqueueing, reveal delegation, and public job DTO mapping.
 - `JobExecutionService`: FFmpeg-backed encode, sample, poster, and subtitle-mux process lifecycles, progress parsing,
-  stderr message updates, output-size capture, sample estimates, registry cleanup, and artifact cleanup on failure.
+  stderr message updates, output-size capture, sample estimates, registry cleanup, artifact cleanup on failure, and
+  promise settlement for scheduler slot release.
 - `CaptionService`: subtitle-job validation/reuse/creation, leading-silence detection, audio extraction, whisper.cpp
-  transcription, VTT/SRT handling, caption editing, and subtitle-mux validation/delegation.
+  transcription, VTT/SRT handling, caption editing, subtitle scheduler enqueueing, and subtitle-mux
+  validation/delegation.
 - `PackageService`: website-package request interpretation, selected-output reading, generated HTML/README/transcript
   creation, ZIP assembly, package-job completion, and public result mapping.
 - `CapabilitiesService`: combines FFmpeg, whisper.cpp, and yt-dlp capability reporting.
@@ -100,6 +114,7 @@ production-runtime composition
   |-- CaptionService
   |-- PackageService
   |-- CleanupService
+  |-- JobScheduler
   `-- StatePersistenceService
       ->
 repositories, manifest store, process/tool infrastructure
@@ -108,8 +123,9 @@ repositories, manifest store, process/tool infrastructure
 Routes continue to depend only on `ApiRuntime` and route-safe DTO types. Future CLI and MCP adapters should call the
 same application services, or a facade over them, rather than duplicating media workflow logic.
 
-Phase 5 should improve queueing, persistence reliability, shutdown, and recovery mechanics. It should not be mixed into
-the Phase 4 structural boundaries.
+Phase 5A adds bounded scheduling and explicit lifecycle transitions only. Phase 5B still needs persistence safety and
+shutdown/recovery work such as atomic or serialized manifest writes, graceful shutdown, queued-job recovery decisions,
+process timeouts, retry policy, and interrupted-output handling.
 
 Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
 public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output
@@ -124,9 +140,11 @@ paths, and sidecar paths are no longer part of public JSON responses.
 5. The user chooses optimization settings.
 6. The web app starts an encoding job with `POST /api/videos/:id/jobs`.
 7. The route layer delegates job creation to `ApiRuntime`.
-8. The API starts FFmpeg through the process-runner boundary and updates repository-backed job state.
-9. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
-10. The final output is streamed from `GET /api/jobs/:id/download`.
+8. The API enqueues process-backed media work through the bounded scheduler.
+9. When a media slot is available, the API starts FFmpeg/Whisper through the process-runner boundary and updates
+   repository-backed job state through explicit lifecycle transitions.
+10. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
+11. The final output is streamed from `GET /api/jobs/:id/download`.
 
 ## Storage
 

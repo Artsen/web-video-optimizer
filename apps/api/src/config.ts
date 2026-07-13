@@ -10,6 +10,7 @@ export type ApiConfig = {
   tmpDir: string;
   manifestPath: string;
   uploadFileSizeLimitBytes: number;
+  maxConcurrentMediaJobs: number;
   whisperCppBin?: string;
   whisperCppModel?: string;
   ytDlpBin?: string;
@@ -28,6 +29,12 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     throw new Error(`Invalid PORT: ${rawPort}`);
   }
 
+  const rawMaxConcurrentMediaJobs = source.MAX_CONCURRENT_MEDIA_JOBS ?? "1";
+  const maxConcurrentMediaJobs = Number(rawMaxConcurrentMediaJobs);
+  if (!Number.isInteger(maxConcurrentMediaJobs) || maxConcurrentMediaJobs <= 0) {
+    throw new Error(`Invalid MAX_CONCURRENT_MEDIA_JOBS: ${rawMaxConcurrentMediaJobs}`);
+  }
+
   const storageRoot = source.STORAGE_ROOT ?? path.resolve(options.cwd, "../../data");
 
   return {
@@ -40,6 +47,7 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     tmpDir: path.join(storageRoot, "tmp"),
     manifestPath: path.join(storageRoot, "manifest.json"),
     uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
+    maxConcurrentMediaJobs,
     whisperCppBin: source.WHISPER_CPP_BIN,
     whisperCppModel: source.WHISPER_CPP_MODEL,
     ytDlpBin: source.YT_DLP_BIN,
