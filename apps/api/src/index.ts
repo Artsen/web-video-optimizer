@@ -9,6 +9,7 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import multer from "multer";
 import { nanoid } from "nanoid";
+import type { JobDto, JobKind, OptimizationSettings, VideoRecordDto } from "@local-video-optimizer/contracts";
 import {
   analyzeWebFriendliness,
   assertLooksLikeVtt,
@@ -21,7 +22,7 @@ import {
   shiftCaptionTimings,
   vttToSrt
 } from "./video-domain.js";
-import type { FFprobeResult, FFprobeStream, OptimizationSettings, VideoMetadata } from "./video-domain.js";
+import type { FFprobeResult, FFprobeStream, VideoMetadata } from "./video-domain.js";
 
 const mkdir = promisify(fs.mkdir);
 const rm = promisify(fs.rm);
@@ -35,36 +36,14 @@ const outputDir = path.join(storageRoot, "outputs");
 const tmpDir = path.join(storageRoot, "tmp");
 const manifestPath = path.join(storageRoot, "manifest.json");
 
-type VideoRecord = {
-  id: string;
-  originalName: string;
+type VideoRecord = VideoRecordDto & {
   storedPath: string;
-  uploadedAt: string;
   sourceHash?: string;
-  metadata: VideoMetadata;
 };
 
-type Job = {
-  id: string;
-  videoId: string;
-  status: "queued" | "running" | "completed" | "failed" | "canceled";
-  kind: "encode" | "sample" | "poster" | "package" | "subtitle" | "mux";
-  progress: number;
-  message?: string;
+type Job = JobDto & {
   outputPath?: string;
-  outputFileName?: string;
   sidecarPath?: string;
-  sidecarFileName?: string;
-  outputSize?: number;
-  ffmpegCommand: string;
-  startedAt: string;
-  completedAt?: string;
-  settings: OptimizationSettings;
-  sampleEstimate?: {
-    sampleSeconds: number;
-    estimatedFullSize: number;
-    estimatedReduction?: number;
-  };
 };
 
 type Manifest = {
@@ -488,7 +467,7 @@ function ytDlpJsRuntimeArgs(): string[] {
   return ["--js-runtimes", ytDlpJsRuntimeValue()];
 }
 
-function publicJob(job: Job): Job {
+function publicJob(job: Job): JobDto {
   return { ...job };
 }
 
@@ -728,12 +707,7 @@ async function streamVideoFile(
   createReadStream(filePath, { start, end }).pipe(res);
 }
 
-function createEncodeJob(
-  video: VideoRecord,
-  settings: OptimizationSettings,
-  kind: Job["kind"],
-  suffix = "optimized"
-): Job {
+function createEncodeJob(video: VideoRecord, settings: OptimizationSettings, kind: JobKind, suffix = "optimized"): Job {
   const jobId = nanoid();
   const baseName = sanitizeFileName(settings.outputFilename || `${path.parse(video.originalName).name}-${suffix}`);
   const extension = settings.outputContainer === "webm" ? ".webm" : ".mp4";

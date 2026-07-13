@@ -38,111 +38,26 @@ import {
   normalizeOutputContainerChange,
   normalizeVideoCodecChange
 } from "./video-ui";
+import type {
+  Capabilities,
+  HistorySnapshot,
+  HistoryVideo,
+  JobDto,
+  OptimizationSettings,
+  PackageMetadata,
+  VideoRecordDto
+} from "@local-video-optimizer/contracts";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:4000`;
 
-type VideoMetadata = {
-  fileName: string;
-  fileSize: number;
-  durationSeconds: number;
-  container: string;
-  formatLongName?: string;
-  videoCodec?: string;
-  audioCodec?: string;
-  trackCounts: { video: number; audio: number; subtitle: number };
-  width?: number;
-  height?: number;
-  displayAspectRatio?: string;
-  frameRate?: number;
-  overallBitrate?: number;
-  videoBitrate?: number;
-  audioBitrate?: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  pixelFormat?: string;
-  color?: { space?: string; transfer?: string; primaries?: string };
-  rotation?: string;
-  tags?: Record<string, string>;
-  webFriendly: boolean;
-  warnings: string[];
-};
-
-type VideoRecord = {
-  id: string;
-  originalName: string;
-  uploadedAt: string;
-  metadata: VideoMetadata;
-};
-
-type Settings = {
-  outputContainer: "mp4" | "webm";
-  videoCodec: "libx264" | "libaom-av1" | "libvpx-vp9";
-  audioCodec: "aac" | "libopus";
-  width?: number;
-  height?: number;
-  crf: number;
-  preset: "veryfast" | "fast" | "medium" | "slow";
-  cpuUsed: number;
-  rowMt: boolean;
-  frameRate?: number;
-  audioMode: "keep" | "compress" | "remove";
+type VideoRecord = VideoRecordDto;
+type Settings = OptimizationSettings & {
   audioBitrateKbps: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  fastStart: boolean;
-  stripMetadata: boolean;
+  cpuUsed: number;
   outputFilename: string;
+  rowMt: boolean;
 };
-
-type Job = {
-  id: string;
-  videoId: string;
-  kind: "encode" | "sample" | "poster" | "package" | "subtitle" | "mux";
-  status: "queued" | "running" | "completed" | "failed" | "canceled";
-  progress: number;
-  message?: string;
-  outputSize?: number;
-  outputFileName?: string;
-  sidecarFileName?: string;
-  ffmpegCommand: string;
-  startedAt: string;
-  completedAt?: string;
-  settings: Settings;
-  sampleEstimate?: {
-    sampleSeconds: number;
-    estimatedFullSize: number;
-    estimatedReduction?: number;
-  };
-};
-
-type HistoryVideo = VideoRecord & {
-  jobIds: string[];
-};
-
-type HistorySnapshot = {
-  videos: HistoryVideo[];
-  jobs: Job[];
-};
-
-type Capabilities = {
-  libx264: boolean;
-  libaomAv1: boolean;
-  libvpxVp9: boolean;
-  aac: boolean;
-  libopus: boolean;
-  whisperCpp?: boolean;
-  whisperModel?: boolean;
-  whisperCommand?: string;
-  ytDlp?: boolean;
-  ytDlpCommand?: string;
-};
-
-type PackageMetadata = {
-  title: string;
-  description: string;
-  language: string;
-  filenamePrefix: string;
-};
+type Job = JobDto;
 
 type PresetInfo = {
   label: string;
@@ -351,7 +266,7 @@ function fileSizeDelta(outputSize: number | undefined, originalSize: number): st
   return "Same size";
 }
 
-function nextExportSuggestion(settings: Settings): string {
+function nextExportSuggestion(settings: OptimizationSettings): string {
   if (settings.outputContainer === "webm" || settings.videoCodec !== "libx264") {
     return "Also create an MP4/H.264 fallback for older browsers and broad Safari coverage.";
   }
@@ -359,7 +274,7 @@ function nextExportSuggestion(settings: Settings): string {
   return "This is a solid fallback. Add an AV1/WebM export if you want a smaller modern-browser source.";
 }
 
-function buildVideoMarkup(job: Job, settings: Settings): string {
+function buildVideoMarkup(job: Job, settings: OptimizationSettings): string {
   const fileName = job.outputFileName ?? `optimized-video.${settings.outputContainer}`;
   const type = settings.outputContainer === "webm" ? "video/webm" : "video/mp4";
   const attributes =
@@ -372,8 +287,8 @@ function buildVideoMarkup(job: Job, settings: Settings): string {
 </video>`;
 }
 
-function describeMediaError(video: HTMLVideoElement): string {
-  const error = video.error;
+function describeMediaError(video: HTMLVideoElement | null): string {
+  const error = video?.error;
   if (!error) return "Media could not be loaded.";
   if (error.code === MediaError.MEDIA_ERR_NETWORK) return "Media request failed while loading this output.";
   if (error.code === MediaError.MEDIA_ERR_DECODE) return "Media loaded, but this browser could not decode it.";
@@ -1053,11 +968,17 @@ function App() {
   }
 
   function updateOutputContainer(outputContainer: Settings["outputContainer"]) {
-    setSettings((current) => normalizeOutputContainerChange(current, outputContainer));
+    setSettings((current) => {
+      const next = normalizeOutputContainerChange(current, outputContainer);
+      return { ...next, outputFilename: next.outputFilename ?? current.outputFilename };
+    });
   }
 
   function updateVideoCodec(videoCodec: Settings["videoCodec"]) {
-    setSettings((current) => normalizeVideoCodecChange(current, videoCodec));
+    setSettings((current) => {
+      const next = normalizeVideoCodecChange(current, videoCodec);
+      return { ...next, outputFilename: next.outputFilename ?? current.outputFilename };
+    });
   }
 
   function applyTargetSize(targetMb: number) {
@@ -2645,12 +2566,13 @@ function App() {
                           ref={originalCompareRef}
                           src={sourceUrl}
                           onLoadedData={() => setCompareMediaErrors((current) => ({ ...current, original: undefined }))}
-                          onError={(event) =>
+                          onError={(event) => {
+                            const message = describeMediaError(event.currentTarget);
                             setCompareMediaErrors((current) => ({
                               ...current,
-                              original: describeMediaError(event.currentTarget)
-                            }))
-                          }
+                              original: message
+                            }));
+                          }}
                           onPlay={() => syncVideoState("original", "play")}
                           onPause={() => syncVideoState("original", "pause")}
                           onSeeked={() => syncVideoState("original", "seek")}
@@ -2667,12 +2589,13 @@ function App() {
                           onLoadedData={() =>
                             setCompareMediaErrors((current) => ({ ...current, optimized: undefined }))
                           }
-                          onError={(event) =>
+                          onError={(event) => {
+                            const message = describeMediaError(event.currentTarget);
                             setCompareMediaErrors((current) => ({
                               ...current,
-                              optimized: describeMediaError(event.currentTarget)
-                            }))
-                          }
+                              optimized: message
+                            }));
+                          }}
                           onPlay={() => syncVideoState("optimized", "play")}
                           onPause={() => syncVideoState("optimized", "pause")}
                           onSeeked={() => syncVideoState("optimized", "seek")}

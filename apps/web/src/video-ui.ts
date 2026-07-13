@@ -1,48 +1,11 @@
-export type VideoMetadata = {
-  fileName: string;
-  fileSize: number;
-  durationSeconds: number;
-  container: string;
-  formatLongName?: string;
-  videoCodec?: string;
-  audioCodec?: string;
-  trackCounts: { video: number; audio: number; subtitle: number };
-  width?: number;
-  height?: number;
-  displayAspectRatio?: string;
-  frameRate?: number;
-  overallBitrate?: number;
-  videoBitrate?: number;
-  audioBitrate?: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  pixelFormat?: string;
-  color?: { space?: string; transfer?: string; primaries?: string };
-  rotation?: string;
-  tags?: Record<string, string>;
-  webFriendly: boolean;
-  warnings: string[];
-};
+import type { OptimizationSettings, VideoMetadata } from "@local-video-optimizer/contracts";
 
-export type Settings = {
-  outputContainer: "mp4" | "webm";
-  videoCodec: "libx264" | "libaom-av1" | "libvpx-vp9";
-  audioCodec: "aac" | "libopus";
-  width?: number;
-  height?: number;
-  crf: number;
-  preset: "veryfast" | "fast" | "medium" | "slow";
+export type Settings = OptimizationSettings & {
+  audioBitrateKbps: number;
   cpuUsed: number;
   rowMt: boolean;
-  frameRate?: number;
-  audioMode: "keep" | "compress" | "remove";
-  audioBitrateKbps: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  fastStart: boolean;
-  stripMetadata: boolean;
-  outputFilename: string;
 };
+export type { VideoMetadata };
 
 export type Recommendation = {
   tone: "good" | "warn" | "info";
