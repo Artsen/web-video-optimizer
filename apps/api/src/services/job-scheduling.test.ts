@@ -19,7 +19,7 @@ import { JobExecutionService, type JobExecutor } from "./job-execution-service.j
 import { JobLifecycleService } from "./job-lifecycle-service.js";
 import { JobService } from "./job-service.js";
 import { PackageService } from "./package-service.js";
-import type { StatePersistenceService } from "./state-persistence-service.js";
+import type { RecoveryReport, StatePersistenceService } from "./state-persistence-service.js";
 
 const tempDirs: string[] = [];
 
@@ -34,7 +34,24 @@ class FakePersistence implements StatePersistenceService {
     this.saves += 1;
   }
 
-  async load(): Promise<void> {}
+  scheduleSave(): void {
+    this.saves += 1;
+  }
+
+  async flush(): Promise<void> {}
+
+  async load(): Promise<RecoveryReport> {
+    return {
+      manifestSource: "none",
+      restoredVideos: 0,
+      restoredJobs: 0,
+      canceledInterruptedJobs: 0,
+      failedMissingOutputJobs: 0,
+      skippedDanglingJobs: 0,
+      removedPartialArtifacts: 0,
+      recoveredFromBackup: false
+    };
+  }
 }
 
 class FakeRevealer implements FileRevealer {

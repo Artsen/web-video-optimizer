@@ -1,12 +1,13 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiConfig } from "../config.js";
 import type { JobEntity } from "../entities/job-entity.js";
 import type { ManifestSnapshot } from "../entities/manifest.js";
 import type { VideoEntity } from "../entities/video-entity.js";
-import type { ManifestStore } from "../persistence/manifest-store.js";
+import type { ManifestLoadResult, ManifestStore } from "../persistence/manifest-store.js";
+import { FakeProcessRunner } from "../infrastructure/processes/test/fake-process-runner.js";
 import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
 import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
 import { createProductionRuntime } from "./production-runtime.js";
@@ -18,8 +19,10 @@ class FakeManifestStore implements ManifestStore {
 
   constructor(private readonly snapshot?: ManifestSnapshot) {}
 
-  async load(): Promise<ManifestSnapshot | undefined> {
-    return this.snapshot;
+  async load(): Promise<ManifestLoadResult> {
+    return this.snapshot
+      ? { kind: "loaded", snapshot: this.snapshot, source: "primary", recoveredFromBackup: false }
+      : { kind: "missing" };
   }
 
   async save(snapshot: ManifestSnapshot): Promise<void> {
@@ -45,6 +48,7 @@ function config(storageRoot: string): ApiConfig {
     manifestPath: path.join(storageRoot, "manifest.json"),
     uploadFileSizeLimitBytes: 1234,
     maxConcurrentMediaJobs: 1,
+    shutdownGracePeriodMs: 15000,
     ytDlpJsRuntime: "node:test"
   };
 }
@@ -112,6 +116,7 @@ async function writeEntityFiles(record: VideoEntity, output?: JobEntity): Promis
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
@@ -288,7 +293,7 @@ describe("createProductionRuntime state isolation", () => {
     expect(publicJson).not.toContain("sidecarPath");
   });
 
-  it("preserves restart manifest-save policy", async () => {
+  it("persists actual repository job state before restart recovery", async () => {
     const root = await tempRoot();
     const record = video(root);
     const videoRepository = new InMemoryVideoRepository();
@@ -312,6 +317,7 @@ describe("createProductionRuntime state isolation", () => {
     ]);
     expect(manifestStore.saved?.jobs.map((savedJob) => savedJob.id)).toEqual([
       "completed-job",
+      "canceled-job",
       "running-job",
       "queued-job"
     ]);
@@ -320,12 +326,56 @@ describe("createProductionRuntime state isolation", () => {
       outputPath: path.join(root, "outputs", "job-1-output.mp4")
     });
     expect(manifestStore.saved?.jobs.find((savedJob) => savedJob.id === "running-job")).toMatchObject({
-      status: "canceled",
-      message: "Canceled by API restart"
+      status: "running",
+      message: "Encoding"
     });
     expect(manifestStore.saved?.jobs.find((savedJob) => savedJob.id === "queued-job")).toMatchObject({
-      status: "canceled",
-      message: "Canceled by API restart"
+      status: "queued",
+      message: "Waiting"
     });
+  });
+
+  it("shutdown is idempotent, cancels queued and running jobs, kills processes, and flushes state", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const root = await tempRoot();
+    const source = video(root);
+    const videoRepository = new InMemoryVideoRepository();
+    const jobRepository = new InMemoryJobRepository();
+    const manifestStore = new FakeManifestStore();
+    const processRunner = new FakeProcessRunner();
+    videoRepository.set(source);
+    await mkdir(path.join(root, "uploads"), { recursive: true });
+    await mkdir(path.join(root, "outputs"), { recursive: true });
+    await writeFile(source.storedPath, "source");
+    const runtime = createProductionRuntime(
+      { ...config(root), shutdownGracePeriodMs: 1 },
+      { videoRepository, jobRepository, manifestStore, processRunner }
+    );
+
+    const running = runtime.createOptimizationJob(source.id, { outputFilename: "running" }).job!;
+    const queued = runtime.createOptimizationJob(source.id, { outputFilename: "queued" }).job!;
+    const firstShutdown = runtime.shutdown();
+    const secondShutdown = runtime.shutdown();
+
+    expect(firstShutdown).toBe(secondShutdown);
+    await firstShutdown;
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("Forcing media process termination"));
+    expect(processRunner.processes[0].killedWith).toBe("SIGKILL");
+    expect(videoRepository.get(source.id)).toBeDefined();
+    expect(jobRepository.get(running.id)).toMatchObject({
+      status: "canceled",
+      progress: 0,
+      message: "Canceled by API shutdown"
+    });
+    expect(jobRepository.get(queued.id)).toMatchObject({
+      status: "canceled",
+      progress: 0,
+      message: "Canceled by API shutdown"
+    });
+    expect(manifestStore.saved?.jobs.map((savedJob) => [savedJob.id, savedJob.status, savedJob.message])).toEqual([
+      [running.id, "canceled", "Canceled by API shutdown"],
+      [queued.id, "canceled", "Canceled by API shutdown"]
+    ]);
   });
 });

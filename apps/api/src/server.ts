@@ -2,6 +2,7 @@ import multer from "multer";
 import { createApp } from "./app.js";
 import { parseApiConfig } from "./config.js";
 import { createProductionRuntime } from "./runtime/production-runtime.js";
+import { startServerLifecycle } from "./server-lifecycle.js";
 
 async function main(): Promise<void> {
   const config = parseApiConfig(process.env, {
@@ -19,9 +20,7 @@ async function main(): Promise<void> {
   });
 
   const app = createApp({ config, runtime, upload });
-  app.listen(config.port, config.host, () => {
-    console.log(`Local Video Optimizer API listening on http://${config.host}:${config.port}`);
-  });
+  await startServerLifecycle({ app, runtime, host: config.host, port: config.port });
 }
 
 main().catch((error) => {

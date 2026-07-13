@@ -17,6 +17,7 @@ describe("parseApiConfig", () => {
       corsOrigin: true,
       uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
       maxConcurrentMediaJobs: 1,
+      shutdownGracePeriodMs: 15000,
       ytDlpJsRuntime: "node:C:\\Program Files\\nodejs\\node.exe"
     });
   });
@@ -53,6 +54,23 @@ describe("parseApiConfig", () => {
     );
     expect(() => parseApiConfig({ MAX_CONCURRENT_MEDIA_JOBS: "" }, options)).toThrow(
       "Invalid MAX_CONCURRENT_MEDIA_JOBS: "
+    );
+  });
+
+  it("accepts and validates shutdown grace period values", () => {
+    expect(parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "1" }, options).shutdownGracePeriodMs).toBe(1);
+    expect(parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "30000" }, options).shutdownGracePeriodMs).toBe(30000);
+    expect(() => parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "0" }, options)).toThrow(
+      "Invalid SHUTDOWN_GRACE_PERIOD_MS: 0"
+    );
+    expect(() => parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "-1" }, options)).toThrow(
+      "Invalid SHUTDOWN_GRACE_PERIOD_MS: -1"
+    );
+    expect(() => parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "1.5" }, options)).toThrow(
+      "Invalid SHUTDOWN_GRACE_PERIOD_MS: 1.5"
+    );
+    expect(() => parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "soon" }, options)).toThrow(
+      "Invalid SHUTDOWN_GRACE_PERIOD_MS: soon"
     );
   });
 

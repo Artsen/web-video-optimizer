@@ -72,7 +72,8 @@ Process-backed media jobs are admitted through a runtime-scoped bounded FIFO sch
 controls the number of concurrent media slots and defaults to `1`, because local video encoding is CPU-intensive.
 Encode, sample, poster, subtitle generation, and subtitle mux jobs consume scheduler slots. Website package jobs remain
 outside the media scheduler because package creation reads completed files and assembles a ZIP without spawning FFmpeg,
-Whisper, or another media process.
+Whisper, or another media process. During runtime shutdown, the scheduler stops accepting new work, drops queued
+callbacks, and can wait for running tasks to settle.
 
 Job lifecycle transitions are explicit API-private behavior. Valid transitions are `queued -> running`,
 `queued -> canceled`, `queued -> failed`, `running -> completed`, `running -> failed`, and `running -> canceled`.
@@ -81,7 +82,8 @@ helpers own repository state, progress, cancellation, artifact cleanup, and pers
 
 Application services own API-private workflows:
 
-- `StatePersistenceService`: manifest load/save policy, including restart cancellation normalization.
+- `StatePersistenceService`: serialized manifest save requests, flush boundaries, manifest load/recovery policy, and
+  restart cancellation normalization.
 - `CleanupService`: queued-task cancellation, job artifact deletion, active-process termination, video deletion cascades,
   and orphan pruning.
 - `VideoService`: upload/import storage, content hashing, duplicate detection, metadata probing, rename, source
@@ -123,9 +125,47 @@ repositories, manifest store, process/tool infrastructure
 Routes continue to depend only on `ApiRuntime` and route-safe DTO types. Future CLI and MCP adapters should call the
 same application services, or a facade over them, rather than duplicating media workflow logic.
 
-Phase 5A adds bounded scheduling and explicit lifecycle transitions only. Phase 5B still needs persistence safety and
-shutdown/recovery work such as atomic or serialized manifest writes, graceful shutdown, queued-job recovery decisions,
-process timeouts, retry policy, and interrupted-output handling.
+## Persistence And Recovery
+
+The manifest storage shape remains:
+
+```json
+{
+  "videos": [],
+  "jobs": []
+}
+```
+
+The primary manifest is written with serialized save requests. Each write is staged to a unique temporary file in the
+same directory, flushed, then atomically renamed over the primary manifest. Before replacement, the previous valid
+primary is preserved as `manifest.json.bak`. A corrupt primary is never treated as empty state: startup recovers from a
+valid backup when possible, and fails clearly when neither primary nor backup can be validated.
+
+Manifest validation is API-private. It validates the top-level object, `videos` and `jobs` arrays, public nested DTO
+fields, and private restoration fields such as `storedPath`, `sourceHash`, `outputPath`, and `sidecarPath`.
+
+Queued and running jobs are persisted as their actual in-memory statuses. On API restart, restored queued or running
+jobs are normalized to canceled history with `Canceled by API restart`, progress reset to `0`, and partial output,
+sidecar, and job-specific temporary artifacts removed. Completed jobs whose required output is missing are restored as
+failed with `Output missing during API restart recovery`. Jobs referencing missing videos are skipped.
+
+Initialization creates directories, validates and restores the manifest, normalizes interrupted state, merges duplicate
+videos, prunes true orphan files, saves the normalized manifest, and flushes persistence before resolving. Orphan pruning
+does not run after unrecoverable manifest corruption.
+
+## Graceful Shutdown
+
+The production runtime exposes an API-private `shutdown()` operation. Routes do not expose shutdown controls. Shutdown
+stops scheduler acceptance, cancels queued callbacks, marks queued/running jobs as canceled with `Canceled by API
+shutdown`, terminates registered media processes with `SIGTERM`, waits up to `SHUTDOWN_GRACE_PERIOD_MS`, then sends
+`SIGKILL` where supported for remaining processes. Final state is saved and flushed before shutdown resolves.
+
+`apps/api/src/server-lifecycle.ts` retains the HTTP server handle and installs one shared `SIGINT`/`SIGTERM` shutdown
+path. The server stops accepting new connections, closes idle connections where Node supports it, waits for runtime
+shutdown, and reports shutdown failures with a nonzero exit code.
+
+Remaining Phase 5C work includes process-output limits, normal execution timeouts, retry/resume policy, stronger
+process containment, and automated real-media integration coverage.
 
 Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
 public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output

@@ -132,6 +132,21 @@ The initial unit tests cover pure behavior extracted from the current API and we
   remain outside the media scheduler
 - Fake-process concurrency tests proving only the configured number of FFmpeg/Whisper workflows start, queued work waits,
   cancellation prevents queued callbacks, and slots are released after success, failure, spawn error, and cancellation
+- Serialized persistence tests using deferred fake manifest writes to prove save requests run in order, `flush()` waits
+  for requested writes, failed saves surface to callers, later saves still work, and explicitly scheduled saves do not
+  create unhandled rejections
+- Atomic manifest-store tests using temporary directories to prove explicit missing/loaded results, pretty JSON,
+  last-known-good backup creation, backup recovery for corrupt or missing primaries, invalid-structure rejection, and
+  fail-safe startup behavior when both primary and backup are corrupt
+- Restart recovery tests for hash recalculation, interrupted queued/running jobs becoming canceled history, missing
+  completed outputs becoming failed history, dangling job skipping, and partial-artifact cleanup
+- Scheduler shutdown tests for stopping acceptance, rejecting late enqueues, canceling queued callbacks, and resolving
+  multiple idle waiters
+- Runtime shutdown tests for idempotent shutdown, queued/running cancellation, media process termination, final manifest
+  persistence, and video preservation
+- Server lifecycle tests with fake server/process objects, covering signal-triggered shutdown, duplicate-signal
+  coalescing, idle/all connection close hooks, runtime shutdown awaiting, and failure exit-code reporting without
+  binding real ports
 
 The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
 argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
@@ -156,9 +171,16 @@ SSE/download-adjacent response behavior where practical, shared-schema parsing, 
 a network port or initializing production storage. The fake runtime is intentionally small and deterministic; it is not
 a production service abstraction.
 
-Manifest tests intentionally separate persistence mechanics from persistence policy. The file store owns loading and
-writing the current JSON shape. Runtime tests cover policy such as startup normalization, restoring only eligible
-records, and keeping public DTOs free of private paths and hashes.
+Manifest tests intentionally separate persistence mechanics from persistence policy. The file store owns explicit
+primary/backup load results, validation, atomic same-directory replacement, and backup recovery. Runtime and persistence
+service tests cover policy such as startup normalization, restoring only eligible records, flushing before
+initialization resolves, and keeping public DTOs free of private paths and hashes.
+
+Real-media graceful-shutdown, crash-recovery, and corruption-recovery smoke tests should use isolated `STORAGE_ROOT`
+directories. They should verify that manifests parse immediately without arbitrary persistence sleeps, interrupted
+jobs are retained as canceled history, no queued job resumes, source videos remain, partial outputs are removed, valid
+backups repair corrupt primaries, and corrupt primary plus corrupt backup fails startup without pruning uploads or
+outputs.
 
 ## Not Covered Yet
 
@@ -170,3 +192,4 @@ records, and keeping public DTOs free of private paths and hashes.
 - End-to-end package ZIP validation with real media
 - Subtitle generation through whisper.cpp
 - YouTube importing through yt-dlp
+- Automated real-media graceful-shutdown and crash-recovery coverage in CI

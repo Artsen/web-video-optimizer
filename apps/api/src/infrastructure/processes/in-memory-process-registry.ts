@@ -16,6 +16,10 @@ export class InMemoryProcessRegistry implements ProcessRegistry {
     return this.#processes.delete(jobId);
   }
 
+  entries(): Array<[string, RunningProcess]> {
+    return [...this.#processes.entries()];
+  }
+
   clear(): void {
     this.#processes.clear();
   }

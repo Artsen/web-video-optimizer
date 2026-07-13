@@ -92,6 +92,15 @@ $env:MAX_CONCURRENT_MEDIA_JOBS="2"
 npm.cmd run dev:api
 ```
 
+Graceful shutdown uses a separate timeout while the API cancels queued/running media work, terminates active processes,
+and flushes the manifest:
+
+```powershell
+$env:SHUTDOWN_GRACE_PERIOD_MS="15000"
+```
+
+This does not limit normal encode, subtitle, import, or package duration. It only bounds application shutdown.
+
 Run the web app in another terminal:
 
 ```bash

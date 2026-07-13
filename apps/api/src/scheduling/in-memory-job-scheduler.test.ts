@@ -25,7 +25,8 @@ describe("InMemoryJobScheduler", () => {
     expect(new InMemoryJobScheduler(2).getSnapshot()).toEqual({
       maxConcurrency: 2,
       queuedJobIds: [],
-      runningJobIds: []
+      runningJobIds: [],
+      accepting: true
     });
   });
 
@@ -62,7 +63,8 @@ describe("InMemoryJobScheduler", () => {
     expect(scheduler.getSnapshot()).toEqual({
       maxConcurrency: 1,
       queuedJobIds: ["second", "third"],
-      runningJobIds: ["first"]
+      runningJobIds: ["first"],
+      accepting: true
     });
 
     first.resolve();
@@ -78,7 +80,8 @@ describe("InMemoryJobScheduler", () => {
     expect(scheduler.getSnapshot()).toEqual({
       maxConcurrency: 1,
       queuedJobIds: [],
-      runningJobIds: []
+      runningJobIds: [],
+      accepting: true
     });
   });
 
@@ -115,7 +118,8 @@ describe("InMemoryJobScheduler", () => {
     expect(scheduler.getSnapshot()).toEqual({
       maxConcurrency: 2,
       queuedJobIds: ["third"],
-      runningJobIds: ["first", "second"]
+      runningJobIds: ["first", "second"],
+      accepting: true
     });
   });
 
@@ -226,7 +230,72 @@ describe("InMemoryJobScheduler", () => {
     expect(scheduler.getSnapshot()).toEqual({
       maxConcurrency: 1,
       queuedJobIds: ["queued"],
-      runningJobIds: ["running"]
+      runningJobIds: ["running"],
+      accepting: true
     });
+  });
+
+  it("stops accepting new tasks and cancels queued callbacks", async () => {
+    const scheduler = new InMemoryJobScheduler(1);
+    const running = deferred();
+    const started: string[] = [];
+
+    scheduler.enqueue({ jobId: "running", run: () => running.promise });
+    scheduler.enqueue({
+      jobId: "queued-a",
+      run: async () => {
+        started.push("queued-a");
+      }
+    });
+    scheduler.enqueue({
+      jobId: "queued-b",
+      run: async () => {
+        started.push("queued-b");
+      }
+    });
+
+    scheduler.stopAccepting();
+    scheduler.stopAccepting();
+    expect(scheduler.isAccepting()).toBe(false);
+    expect(() => scheduler.enqueue({ jobId: "late", run: async () => undefined })).toThrow(
+      "Job scheduler is not accepting new tasks"
+    );
+    expect(scheduler.cancelAllQueued()).toEqual(["queued-a", "queued-b"]);
+    expect(scheduler.getSnapshot()).toMatchObject({
+      queuedJobIds: [],
+      runningJobIds: ["running"],
+      accepting: false
+    });
+
+    running.resolve();
+    await flush();
+    expect(started).toEqual([]);
+    await expect(scheduler.waitForIdle()).resolves.toBeUndefined();
+  });
+
+  it("resolves multiple idle waiters after fulfilled and rejected running tasks settle", async () => {
+    const scheduler = new InMemoryJobScheduler(2);
+    const first = deferred();
+    const second = deferred();
+    const handled: string[] = [];
+
+    await expect(scheduler.waitForIdle()).resolves.toBeUndefined();
+    scheduler.enqueue({ jobId: "first", run: () => first.promise });
+    scheduler.enqueue({
+      jobId: "second",
+      run: () => second.promise,
+      onUnhandledError: (error) => {
+        handled.push(error instanceof Error ? error.message : String(error));
+      }
+    });
+
+    const waiterA = scheduler.waitForIdle();
+    const waiterB = scheduler.waitForIdle();
+    first.resolve();
+    second.reject(new Error("boom"));
+    await expect(waiterA).resolves.toBeUndefined();
+    await expect(waiterB).resolves.toBeUndefined();
+    expect(handled).toEqual(["boom"]);
+    expect(scheduler.getSnapshot().runningJobIds).toEqual([]);
   });
 });

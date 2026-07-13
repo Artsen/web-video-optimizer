@@ -39,6 +39,10 @@ import type { ApiRuntime, UploadedVideoFile } from "./api-runtime.js";
 
 const mkdir = promisify(fs.mkdir);
 
+export interface ProductionRuntime extends ApiRuntime {
+  shutdown(): Promise<void>;
+}
+
 export type ProductionRuntimeDependencies = {
   videoRepository?: VideoRepository;
   jobRepository?: JobRepository;
@@ -57,7 +61,7 @@ export type ProductionRuntimeDependencies = {
 export function createProductionRuntime(
   apiConfig: ApiConfig,
   dependencies: ProductionRuntimeDependencies = {}
-): ApiRuntime {
+): ProductionRuntime {
   const processRunner = dependencies.processRunner ?? new NodeProcessRunner();
   const commandRunner = dependencies.commandRunner ?? createCommandRunner(processRunner);
   const videoRepository = dependencies.videoRepository ?? new InMemoryVideoRepository();
@@ -73,7 +77,9 @@ export function createProductionRuntime(
   const jobScheduler = dependencies.jobScheduler ?? new InMemoryJobScheduler(apiConfig.maxConcurrentMediaJobs);
   const jobLifecycle = new JobLifecycleService();
 
-  const statePersistence = new ManifestStatePersistenceService(videoRepository, jobRepository, manifestStore);
+  const statePersistence = new ManifestStatePersistenceService(videoRepository, jobRepository, manifestStore, {
+    tmpDir: apiConfig.tmpDir
+  });
   const cleanupService = new CleanupService(
     videoRepository,
     jobRepository,
@@ -140,6 +146,31 @@ export function createProductionRuntime(
     statePersistence,
     jobService
   );
+  let shutdownPromise: Promise<void> | undefined;
+
+  const cancelJobForShutdown = async (jobId: string): Promise<void> => {
+    const job = jobRepository.get(jobId);
+    if (!job) return;
+    if (job.status === "queued" || job.status === "running") {
+      jobLifecycle.cancel(job, "Canceled by API shutdown");
+      job.progress = 0;
+      await cleanupService.removeJobArtifacts(job);
+    }
+  };
+
+  const waitForSchedulerIdleWithGrace = async (): Promise<boolean> => {
+    let timeout: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([
+        jobScheduler.waitForIdle().then(() => true),
+        new Promise<boolean>((resolve) => {
+          timeout = setTimeout(() => resolve(false), apiConfig.shutdownGracePeriodMs);
+        })
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  };
 
   return {
     async initialize() {
@@ -151,10 +182,19 @@ export function createProductionRuntime(
         mkdir(apiConfig.outputDir, { recursive: true }),
         mkdir(apiConfig.tmpDir, { recursive: true })
       ]);
-      await statePersistence.load();
+      const recovery = await statePersistence.load();
       await videoService.mergeDuplicateVideos();
       await cleanupService.pruneOrphanFiles();
       await statePersistence.save();
+      await statePersistence.flush();
+      if (
+        recovery.recoveredFromBackup ||
+        recovery.canceledInterruptedJobs > 0 ||
+        recovery.failedMissingOutputJobs > 0 ||
+        recovery.skippedDanglingJobs > 0
+      ) {
+        console.warn("Recovered application state:", recovery);
+      }
     },
     async getCapabilities() {
       return capabilitiesService.getCapabilities();
@@ -240,6 +280,40 @@ export function createProductionRuntime(
     },
     async deleteJob(id: string) {
       return jobService.delete(id);
+    },
+    shutdown() {
+      shutdownPromise ??= (async () => {
+        jobScheduler.stopAccepting();
+        const canceledQueuedIds = jobScheduler.cancelAllQueued();
+        await Promise.all(canceledQueuedIds.map((jobId) => cancelJobForShutdown(jobId)));
+
+        for (const jobId of jobScheduler.getSnapshot().runningJobIds) {
+          await cancelJobForShutdown(jobId);
+        }
+
+        for (const [, process] of processRegistry.entries()) {
+          process.kill("SIGTERM");
+        }
+
+        const idle = await waitForSchedulerIdleWithGrace();
+        if (!idle) {
+          for (const [jobId, process] of processRegistry.entries()) {
+            console.warn(`Forcing media process termination for job ${jobId}`);
+            process.kill("SIGKILL");
+            processRegistry.delete(jobId);
+          }
+        }
+
+        for (const job of jobRepository.getAll()) {
+          if (job.status === "canceled") {
+            await cleanupService.removeJobArtifacts(job);
+          }
+        }
+
+        await statePersistence.save();
+        await statePersistence.flush();
+      })();
+      return shutdownPromise;
     }
   };
 }
