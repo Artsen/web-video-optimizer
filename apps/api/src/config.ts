@@ -11,6 +11,7 @@ export type ApiConfig = {
   manifestPath: string;
   uploadFileSizeLimitBytes: number;
   maxConcurrentMediaJobs: number;
+  shutdownGracePeriodMs: number;
   whisperCppBin?: string;
   whisperCppModel?: string;
   ytDlpBin?: string;
@@ -35,6 +36,12 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     throw new Error(`Invalid MAX_CONCURRENT_MEDIA_JOBS: ${rawMaxConcurrentMediaJobs}`);
   }
 
+  const rawShutdownGracePeriodMs = source.SHUTDOWN_GRACE_PERIOD_MS ?? "15000";
+  const shutdownGracePeriodMs = Number(rawShutdownGracePeriodMs);
+  if (!Number.isInteger(shutdownGracePeriodMs) || shutdownGracePeriodMs <= 0) {
+    throw new Error(`Invalid SHUTDOWN_GRACE_PERIOD_MS: ${rawShutdownGracePeriodMs}`);
+  }
+
   const storageRoot = source.STORAGE_ROOT ?? path.resolve(options.cwd, "../../data");
 
   return {
@@ -48,6 +55,7 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     manifestPath: path.join(storageRoot, "manifest.json"),
     uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
     maxConcurrentMediaJobs,
+    shutdownGracePeriodMs,
     whisperCppBin: source.WHISPER_CPP_BIN,
     whisperCppModel: source.WHISPER_CPP_MODEL,
     ytDlpBin: source.YT_DLP_BIN,

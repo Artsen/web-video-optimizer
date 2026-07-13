@@ -192,7 +192,7 @@ export class CaptionService {
     };
 
     this.jobs.set(job);
-    void this.persistence.save();
+    this.persistence.scheduleSave();
     return job;
   }
 
@@ -224,7 +224,7 @@ export class CaptionService {
     };
 
     this.jobs.set(job);
-    void this.persistence.save();
+    this.persistence.scheduleSave();
     return job;
   }
 
@@ -283,7 +283,7 @@ export class CaptionService {
         ? `Detected ${leadingSilenceSeconds.toFixed(2)}s leading silence`
         : "Extracting audio for subtitles";
     job.ffmpegCommand = `${commandPreview(extractArgs)} && ${commandPreviewFor(whisperCommand, whisperArgs)}`;
-    void this.persistence.save();
+    this.persistence.scheduleSave();
 
     await new Promise<void>((resolve) => {
       let settled = false;

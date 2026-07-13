@@ -13,7 +13,7 @@ import type { FfmpegCapabilitiesAdapter } from "../infrastructure/tools/ffmpeg-c
 import type { MediaProbe } from "../infrastructure/tools/ffprobe-adapter.js";
 import type { WhisperAdapter } from "../infrastructure/tools/whisper-adapter.js";
 import type { VideoDownloader } from "../infrastructure/tools/yt-dlp-adapter.js";
-import type { ManifestStore } from "../persistence/manifest-store.js";
+import type { ManifestLoadResult, ManifestStore } from "../persistence/manifest-store.js";
 import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
 import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
 import { CapabilitiesService } from "./capabilities-service.js";
@@ -28,8 +28,10 @@ class FakeManifestStore implements ManifestStore {
 
   constructor(private readonly snapshot?: ManifestSnapshot) {}
 
-  async load(): Promise<ManifestSnapshot | undefined> {
-    return this.snapshot;
+  async load(): Promise<ManifestLoadResult> {
+    return this.snapshot
+      ? { kind: "loaded", snapshot: this.snapshot, source: "primary", recoveredFromBackup: false }
+      : { kind: "missing" };
   }
 
   async save(snapshot: ManifestSnapshot): Promise<void> {
@@ -139,7 +141,7 @@ afterEach(async () => {
 });
 
 describe("ManifestStatePersistenceService", () => {
-  it("persists queued and running jobs as canceled while excluding already canceled jobs", async () => {
+  it("persists actual queued, running, and canceled repository jobs", async () => {
     const videos = new InMemoryVideoRepository();
     const jobs = new InMemoryJobRepository();
     const store = new FakeManifestStore();
@@ -153,8 +155,9 @@ describe("ManifestStatePersistenceService", () => {
     await service.save();
 
     expect(store.saved?.jobs.map((item) => [item.id, item.status, item.message])).toEqual([
-      ["queued", "canceled", "Canceled by API restart"],
-      ["running", "canceled", "Canceled by API restart"]
+      ["queued", "queued", undefined],
+      ["running", "running", undefined],
+      ["canceled", "canceled", undefined]
     ]);
   });
 });

@@ -1,9 +1,9 @@
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ManifestSnapshot } from "../entities/manifest.js";
-import { FileManifestStore } from "./file-manifest-store.js";
+import { FileManifestStore, ManifestLoadError } from "./file-manifest-store.js";
 
 const tempDirs: string[] = [];
 
@@ -13,7 +13,7 @@ async function tempManifestPath(): Promise<string> {
   return path.join(dir, "manifest.json");
 }
 
-function snapshot(): ManifestSnapshot {
+function snapshot(overrides: Partial<ManifestSnapshot> = {}): ManifestSnapshot {
   return {
     videos: [
       {
@@ -65,7 +65,8 @@ function snapshot(): ManifestSnapshot {
           outputFilename: "captions"
         }
       }
-    ]
+    ],
+    ...overrides
   };
 }
 
@@ -75,42 +76,25 @@ afterEach(async () => {
 });
 
 describe("FileManifestStore", () => {
-  it("returns undefined for a missing manifest", async () => {
-    await expect(new FileManifestStore(await tempManifestPath()).load()).resolves.toBeUndefined();
+  it("returns an explicit missing result for a missing manifest and backup", async () => {
+    await expect(new FileManifestStore(await tempManifestPath()).load()).resolves.toEqual({ kind: "missing" });
   });
 
-  it("round-trips saved snapshots", async () => {
+  it("round-trips saved snapshots and preserves internal private fields", async () => {
     const store = new FileManifestStore(await tempManifestPath());
     const manifest = snapshot();
 
     await store.save(manifest);
 
-    await expect(store.load()).resolves.toEqual(manifest);
-  });
-
-  it("preserves internal private fields", async () => {
-    const store = new FileManifestStore(await tempManifestPath());
-
-    await store.save(snapshot());
-
-    const loaded = await store.load();
-    expect(loaded?.videos[0]).toMatchObject({ storedPath: "uploads/video-1.mp4", sourceHash: "hash-1" });
-    expect(loaded?.jobs[0]).toMatchObject({
-      outputPath: "outputs/job-1-captions.vtt",
-      sidecarPath: "outputs/job-1-captions.srt"
+    await expect(store.load()).resolves.toEqual({
+      kind: "loaded",
+      snapshot: manifest,
+      source: "primary",
+      recoveredFromBackup: false
     });
   });
 
-  it("saves and loads an empty manifest", async () => {
-    const store = new FileManifestStore(await tempManifestPath());
-    const empty: ManifestSnapshot = { videos: [], jobs: [] };
-
-    await store.save(empty);
-
-    await expect(store.load()).resolves.toEqual(empty);
-  });
-
-  it("writes formatted JSON", async () => {
+  it("saves empty manifests with pretty JSON", async () => {
     const manifestPath = await tempManifestPath();
     const store = new FileManifestStore(manifestPath);
 
@@ -119,28 +103,70 @@ describe("FileManifestStore", () => {
     await expect(readFile(manifestPath, "utf8")).resolves.toBe('{\n  "videos": [],\n  "jobs": []\n}');
   });
 
-  it("returns undefined and warns for malformed JSON", async () => {
+  it("preserves the previous valid primary as the backup on replacement", async () => {
     const manifestPath = await tempManifestPath();
-    await import("node:fs/promises").then((fs) => fs.writeFile(manifestPath, "{nope", "utf8"));
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const store = new FileManifestStore(manifestPath);
+    const first = snapshot();
+    const second = snapshot({ jobs: [] });
 
-    await expect(new FileManifestStore(manifestPath).load()).resolves.toBeUndefined();
+    await store.save(first);
+    await store.save(second);
 
-    expect(warn).toHaveBeenCalledWith("Unable to load manifest:", expect.any(SyntaxError));
+    await expect(readFile(manifestPath, "utf8").then(JSON.parse)).resolves.toEqual(second);
+    await expect(readFile(`${manifestPath}.bak`, "utf8").then(JSON.parse)).resolves.toEqual(first);
   });
 
-  it("keeps different manifest paths isolated", async () => {
-    const first = new FileManifestStore(await tempManifestPath());
-    const second = new FileManifestStore(await tempManifestPath());
+  it("recovers from a valid backup when the primary is corrupt or missing", async () => {
+    const manifestPath = await tempManifestPath();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await writeFile(`${manifestPath}.bak`, JSON.stringify(snapshot(), null, 2));
+
+    await writeFile(manifestPath, "{nope", "utf8");
+    await expect(new FileManifestStore(manifestPath).load()).resolves.toMatchObject({
+      kind: "loaded",
+      source: "backup",
+      recoveredFromBackup: true
+    });
+    expect(warn).toHaveBeenCalledWith("Primary manifest is invalid; recovered state from backup manifest.");
+
+    await rm(manifestPath, { force: true });
+    await expect(new FileManifestStore(manifestPath).load()).resolves.toMatchObject({
+      kind: "loaded",
+      source: "backup",
+      recoveredFromBackup: true
+    });
+  });
+
+  it("fails startup clearly when primary and backup are corrupt", async () => {
+    const manifestPath = await tempManifestPath();
+    await writeFile(manifestPath, "{nope", "utf8");
+    await writeFile(`${manifestPath}.bak`, "{also-nope", "utf8");
+
+    await expect(new FileManifestStore(manifestPath).load()).rejects.toBeInstanceOf(ManifestLoadError);
+  });
+
+  it("rejects invalid internal manifest structure", async () => {
+    const manifestPath = await tempManifestPath();
+    await writeFile(manifestPath, JSON.stringify({ videos: [{}], jobs: [] }), "utf8");
+
+    await expect(new FileManifestStore(manifestPath).load()).rejects.toBeInstanceOf(ManifestLoadError);
+  });
+
+  it("keeps different manifest paths isolated and cleans attempted temp files", async () => {
+    const firstPath = await tempManifestPath();
+    const secondPath = await tempManifestPath();
+    const first = new FileManifestStore(firstPath);
+    const second = new FileManifestStore(secondPath);
 
     await first.save(snapshot());
     await second.save({ videos: [], jobs: [] });
 
-    await expect(first.load()).resolves.toEqual(snapshot());
-    await expect(second.load()).resolves.toEqual({ videos: [], jobs: [] });
+    await expect(first.load()).resolves.toMatchObject({ kind: "loaded", snapshot: snapshot() });
+    await expect(second.load()).resolves.toMatchObject({ kind: "loaded", snapshot: { videos: [], jobs: [] } });
+    await expect(readdir(path.dirname(firstPath))).resolves.not.toContain(expect.stringContaining(".tmp"));
   });
 
-  it("expects the parent directory to already exist when saving", async () => {
+  it("expects the parent directory to already exist when saving and leaves no temp file there", async () => {
     const missingParent = path.join(await tempManifestPath(), "missing", "manifest.json");
 
     await expect(new FileManifestStore(missingParent).save({ videos: [], jobs: [] })).rejects.toMatchObject({

@@ -3,6 +3,8 @@ import type { JobScheduler, JobSchedulerSnapshot, ScheduledMediaTask } from "./j
 export class InMemoryJobScheduler implements JobScheduler {
   readonly #queued: ScheduledMediaTask[] = [];
   readonly #running = new Set<string>();
+  readonly #idleWaiters: Array<() => void> = [];
+  #accepting = true;
 
   constructor(private readonly maxConcurrency: number) {
     if (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0) {
@@ -11,12 +13,37 @@ export class InMemoryJobScheduler implements JobScheduler {
   }
 
   enqueue(task: ScheduledMediaTask): void {
+    if (!this.#accepting) {
+      throw new Error("Job scheduler is not accepting new tasks");
+    }
     if (this.isQueued(task.jobId) || this.isRunning(task.jobId)) {
       throw new Error(`Job is already scheduled: ${task.jobId}`);
     }
 
     this.#queued.push(task);
     this.drain();
+  }
+
+  stopAccepting(): void {
+    this.#accepting = false;
+  }
+
+  cancelAllQueued(): string[] {
+    const canceled = this.#queued.map((task) => task.jobId);
+    this.#queued.length = 0;
+    this.resolveIdleIfNeeded();
+    return canceled;
+  }
+
+  waitForIdle(): Promise<void> {
+    if (this.#running.size === 0 && this.#queued.length === 0) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.#idleWaiters.push(resolve);
+    });
+  }
+
+  isAccepting(): boolean {
+    return this.#accepting;
   }
 
   cancelQueued(jobId: string): boolean {
@@ -38,7 +65,8 @@ export class InMemoryJobScheduler implements JobScheduler {
     return {
       maxConcurrency: this.maxConcurrency,
       queuedJobIds: this.#queued.map((task) => task.jobId),
-      runningJobIds: [...this.#running]
+      runningJobIds: [...this.#running],
+      accepting: this.#accepting
     };
   }
 
@@ -58,6 +86,12 @@ export class InMemoryJobScheduler implements JobScheduler {
     } finally {
       this.#running.delete(task.jobId);
       this.drain();
+      this.resolveIdleIfNeeded();
     }
+  }
+
+  private resolveIdleIfNeeded(): void {
+    if (this.#running.size > 0 || this.#queued.length > 0) return;
+    for (const resolve of this.#idleWaiters.splice(0)) resolve();
   }
 }

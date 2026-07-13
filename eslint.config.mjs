@@ -157,7 +157,19 @@ export default tseslint.config(
       "no-restricted-imports": [
         "error",
         {
-          paths: ["express", "react", "react-dom"]
+          paths: ["express", "react", "react-dom"],
+          patterns: ["../routes/**", "../services/**"]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/server-lifecycle.ts", "apps/api/src/server-lifecycle.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: ["./services/**", "./routes/**", "./persistence/**", "./repositories/**"]
         }
       ]
     }
@@ -190,7 +202,12 @@ export default tseslint.config(
       "no-restricted-imports": [
         "error",
         {
-          patterns: ["../../api/src/scheduling/**", "../../api/src/services/**"]
+          patterns: [
+            "../../api/src/scheduling/**",
+            "../../api/src/services/**",
+            "../../api/src/persistence/**",
+            "../../api/src/runtime/**"
+          ]
         }
       ]
     }

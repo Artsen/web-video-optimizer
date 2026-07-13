@@ -97,7 +97,7 @@ export class JobService {
     };
 
     this.jobs.set(job);
-    void this.persistence.save();
+    this.persistence.scheduleSave();
     this.enqueueMediaJob(job, () => this.execution.runPoster(job, video.storedPath, atSeconds));
     return this.publicJob(job);
   }
@@ -228,7 +228,7 @@ export class JobService {
     };
 
     this.jobs.set(job);
-    void this.persistence.save();
+    this.persistence.scheduleSave();
     return job;
   }
 

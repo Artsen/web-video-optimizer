@@ -8,6 +8,7 @@ export type JobSchedulerSnapshot = {
   maxConcurrency: number;
   queuedJobIds: string[];
   runningJobIds: string[];
+  accepting: boolean;
 };
 
 export interface QueuedTaskCanceler {
@@ -16,6 +17,10 @@ export interface QueuedTaskCanceler {
 
 export interface JobScheduler extends QueuedTaskCanceler {
   enqueue(task: ScheduledMediaTask): void;
+  stopAccepting(): void;
+  cancelAllQueued(): string[];
+  waitForIdle(): Promise<void>;
+  isAccepting(): boolean;
   isQueued(jobId: string): boolean;
   isRunning(jobId: string): boolean;
   getSnapshot(): JobSchedulerSnapshot;

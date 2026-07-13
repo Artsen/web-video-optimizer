@@ -45,7 +45,7 @@ export class JobExecutionService implements JobExecutor {
     if (!this.lifecycle.start(job, "Encoding started")) {
       return Promise.resolve();
     }
-    void this.persistence.save();
+    this.persistence.scheduleSave();
 
     const args = [
       "-progress",
@@ -115,7 +115,7 @@ export class JobExecutionService implements JobExecutor {
     if (!this.lifecycle.start(job, "Generating poster")) {
       return Promise.resolve();
     }
-    void this.persistence.save();
+    this.persistence.scheduleSave();
 
     const args = [
       "-y",
@@ -167,7 +167,7 @@ export class JobExecutionService implements JobExecutor {
     if (!this.lifecycle.start(job, "Embedding subtitle track")) {
       return Promise.resolve();
     }
-    void this.persistence.save();
+    this.persistence.scheduleSave();
 
     const args = [
       "-progress",
