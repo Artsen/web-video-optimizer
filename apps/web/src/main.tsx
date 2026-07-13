@@ -32,6 +32,12 @@ import {
   ZoomOut
 } from "lucide-react";
 import "./styles.css";
+import {
+  buildRecommendations,
+  estimateOutputSize,
+  normalizeOutputContainerChange,
+  normalizeVideoCodecChange
+} from "./video-ui";
 
 const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? `${window.location.protocol}//${window.location.hostname}:4000`;
 
@@ -129,11 +135,6 @@ type Capabilities = {
   whisperCommand?: string;
   ytDlp?: boolean;
   ytDlpCommand?: string;
-};
-
-type Recommendation = {
-  tone: "good" | "warn" | "info";
-  text: string;
 };
 
 type PackageMetadata = {
@@ -263,7 +264,11 @@ const initialSettings: Settings = {
 };
 
 function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
 }
 
 function cleanSubtitleDraft(vtt: string): string {
@@ -275,7 +280,14 @@ function cleanSubtitleDraft(vtt: string): string {
     .filter((line) => !/^\[(?:BLANK_AUDIO|MUSIC|SILENCE|NOISE|APPLAUSE|LAUGHTER)\]$/i.test(line.trim()))
     .filter((line) => {
       const trimmed = line.trim();
-      if (!trimmed || trimmed.includes("-->") || /^WEBVTT\b/i.test(trimmed) || /^NOTE\b/i.test(trimmed) || /^\d+$/.test(trimmed)) return true;
+      if (
+        !trimmed ||
+        trimmed.includes("-->") ||
+        /^WEBVTT\b/i.test(trimmed) ||
+        /^NOTE\b/i.test(trimmed) ||
+        /^\d+$/.test(trimmed)
+      )
+        return true;
       const key = trimmed.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
@@ -305,29 +317,10 @@ function formatBitrate(bits?: number): string {
 function formatDuration(seconds?: number): string {
   if (!seconds) return "Unknown";
   const minutes = Math.floor(seconds / 60);
-  const rest = Math.round(seconds % 60).toString().padStart(2, "0");
+  const rest = Math.round(seconds % 60)
+    .toString()
+    .padStart(2, "0");
   return `${minutes}:${rest}`;
-}
-
-function estimateOutputSize(metadata: VideoMetadata, settings: Settings): { bytes?: number; note: string; reduction?: number } {
-  if (!metadata.durationSeconds) {
-    return { note: "Estimate unavailable until duration is known." };
-  }
-
-  const sourceBitrate = metadata.overallBitrate ?? 0;
-  const qualityFactor = Math.max(0.28, Math.min(0.95, 1 - (settings.crf - 18) * 0.045));
-  const scaleFactor = settings.width && metadata.width ? Math.min(1, settings.width / metadata.width) : 1;
-  const frameFactor = settings.frameRate && metadata.frameRate ? Math.min(1, settings.frameRate / metadata.frameRate) : 1;
-  const audioBitrate = settings.audioMode === "remove" ? 0 : settings.audioBitrateKbps * 1000;
-  const videoBitrate = Math.max(180_000, sourceBitrate * qualityFactor * scaleFactor * frameFactor - (metadata.audioBitrate ?? 0));
-  const bytes = ((videoBitrate + audioBitrate) * metadata.durationSeconds) / 8;
-  const reduction = metadata.fileSize ? Math.round((1 - bytes / metadata.fileSize) * 100) : undefined;
-
-  return {
-    bytes,
-    reduction,
-    note: "Approximate CRF estimate. Actual size depends on motion, detail, grain, and encoder decisions."
-  };
 }
 
 function codecLabel(codec: Settings["videoCodec"]): string {
@@ -358,14 +351,6 @@ function fileSizeDelta(outputSize: number | undefined, originalSize: number): st
   return "Same size";
 }
 
-function variationGroup(jobKind: Job["kind"]): string {
-  if (jobKind === "encode" || jobKind === "mux") return "Video Exports";
-  if (jobKind === "poster") return "Poster Images";
-  if (jobKind === "sample") return "Sample Estimates";
-  if (jobKind === "subtitle") return "Captions";
-  return "Packages";
-}
-
 function nextExportSuggestion(settings: Settings): string {
   if (settings.outputContainer === "webm" || settings.videoCodec !== "libx264") {
     return "Also create an MP4/H.264 fallback for older browsers and broad Safari coverage.";
@@ -374,59 +359,29 @@ function nextExportSuggestion(settings: Settings): string {
   return "This is a solid fallback. Add an AV1/WebM export if you want a smaller modern-browser source.";
 }
 
-function buildRecommendations(metadata: VideoMetadata, settings: Settings, estimate?: { bytes?: number; reduction?: number }): Recommendation[] {
-  const items: Recommendation[] = [];
-  const megapixels = metadata.width && metadata.height ? (metadata.width * metadata.height) / 1_000_000 : 0;
-
-  if (settings.outputContainer === "mp4" && settings.videoCodec !== "libx264") {
-    items.push({ tone: "warn", text: "Use MP4/H.264 as your fallback export. AV1 in MP4 is useful in some cases, but H.264 still has the broadest support." });
-  }
-  if (settings.outputContainer === "webm" && settings.videoCodec === "libx264") {
-    items.push({ tone: "warn", text: "WebM should use AV1 or VP9. H.264 belongs in MP4 for normal website delivery." });
-  }
-  if (settings.outputContainer === "mp4" && settings.audioCodec !== "aac" && settings.audioMode !== "remove") {
-    items.push({ tone: "warn", text: "MP4 web exports should normally use AAC audio. Opus is a better fit for WebM." });
-  }
-  if (settings.outputContainer === "webm" && settings.audioCodec !== "libopus" && settings.audioMode !== "remove") {
-    items.push({ tone: "warn", text: "WebM exports should normally use Opus audio for browser compatibility and compression." });
-  }
-  if (metadata.fileSize > 5_000_000 && estimate?.bytes && estimate.bytes < metadata.fileSize) {
-    items.push({ tone: "good", text: `This export is estimated to save about ${estimate.reduction}% versus the original.` });
-  }
-  if ((metadata.overallBitrate ?? 0) > 8_000_000) {
-    items.push({ tone: "info", text: "The source bitrate is high for many web pages. Resizing, lowering fps, or raising CRF should help page speed." });
-  }
-  if (megapixels > 2.2 && !settings.width) {
-    items.push({ tone: "info", text: "The source is larger than 1080p. Consider 1280px or 1920px width unless the video is meant to be inspected full-screen." });
-  }
-  if ((metadata.frameRate ?? 0) > 30 && !settings.frameRate) {
-    items.push({ tone: "info", text: "High frame-rate video can be heavy. For hero or product sections, 24 or 30 fps is often enough." });
-  }
-  if (settings.audioMode !== "remove" && metadata.trackCounts.audio === 0) {
-    items.push({ tone: "info", text: "This source has no audio track, so audio settings will not affect the output." });
-  }
-  if (settings.audioMode !== "remove" && settings.audioBitrateKbps > 160) {
-    items.push({ tone: "info", text: "Audio above 160 kbps rarely matters for typical website video. Lower it first if file size is the priority." });
-  }
-  if (settings.fastStart && settings.outputContainer === "mp4") {
-    items.push({ tone: "good", text: "Fast-start is enabled, which helps MP4 playback begin sooner on web pages." });
-  }
-
-  if (items.length === 0) {
-    items.push({ tone: "good", text: "These settings look reasonable for a web export." });
-  }
-
-  return items;
-}
-
 function buildVideoMarkup(job: Job, settings: Settings): string {
   const fileName = job.outputFileName ?? `optimized-video.${settings.outputContainer}`;
   const type = settings.outputContainer === "webm" ? "video/webm" : "video/mp4";
-  const attributes = settings.audioMode === "remove" ? "autoplay muted loop playsinline preload=\"metadata\"" : "controls preload=\"metadata\"";
+  const attributes =
+    settings.audioMode === "remove"
+      ? 'autoplay muted loop playsinline preload="metadata"'
+      : 'controls preload="metadata"';
 
   return `<video ${attributes} poster="poster.webp">
   <source src="${fileName}" type="${type}">
 </video>`;
+}
+
+function describeMediaError(video: HTMLVideoElement): string {
+  const error = video.error;
+  if (!error) return "Media could not be loaded.";
+  if (error.code === MediaError.MEDIA_ERR_NETWORK) return "Media request failed while loading this output.";
+  if (error.code === MediaError.MEDIA_ERR_DECODE) return "Media loaded, but this browser could not decode it.";
+  if (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    return "This browser cannot preview this output format or codec.";
+  }
+  if (error.code === MediaError.MEDIA_ERR_ABORTED) return "Media loading was aborted.";
+  return error.message || "Media could not be loaded.";
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
@@ -491,7 +446,9 @@ function App() {
   const [activePreset, setActivePreset] = React.useState("Maximum Compatibility");
   const [syncPlayback, setSyncPlayback] = React.useState(true);
   const [activeTab, setActiveTab] = React.useState<"workflow" | "history">("workflow");
-  const [activeView, setActiveView] = React.useState<"prepare" | "outputs" | "custom" | "compare" | "captions">("prepare");
+  const [activeView, setActiveView] = React.useState<"prepare" | "outputs" | "custom" | "compare" | "captions">(
+    "prepare"
+  );
   const [history, setHistory] = React.useState<HistorySnapshot>({ videos: [], jobs: [] });
   const [selectedVideoIds, setSelectedVideoIds] = React.useState<string[]>([]);
   const [selectedJobIds, setSelectedJobIds] = React.useState<string[]>([]);
@@ -500,7 +457,12 @@ function App() {
   const [renamingSource, setRenamingSource] = React.useState(false);
   const [jobNameDrafts, setJobNameDrafts] = React.useState<Record<string, string>>({});
   const [renamingJobId, setRenamingJobId] = React.useState<string | null>(null);
-  const [packageMetadata, setPackageMetadata] = React.useState<PackageMetadata>({ title: "", description: "", language: "en", filenamePrefix: "" });
+  const [packageMetadata, setPackageMetadata] = React.useState<PackageMetadata>({
+    title: "",
+    description: "",
+    language: "en",
+    filenamePrefix: ""
+  });
   const [posterJob, setPosterJob] = React.useState<Job | null>(null);
   const [sampleJob, setSampleJob] = React.useState<Job | null>(null);
   const [packageJob, setPackageJob] = React.useState<Job | null>(null);
@@ -509,11 +471,17 @@ function App() {
   const [activePosterPreview, setActivePosterPreview] = React.useState<Job | null>(null);
   const [posterZoom, setPosterZoom] = React.useState(1);
   const [posterPan, setPosterPan] = React.useState({ x: 0, y: 0 });
-  const [posterDragStart, setPosterDragStart] = React.useState<{ x: number; y: number; panX: number; panY: number } | null>(null);
+  const [posterDragStart, setPosterDragStart] = React.useState<{
+    x: number;
+    y: number;
+    panX: number;
+    panY: number;
+  } | null>(null);
   const [editingSubtitleJob, setEditingSubtitleJob] = React.useState<Job | null>(null);
   const [subtitleDraft, setSubtitleDraft] = React.useState("");
   const [subtitlePreviewKey, setSubtitlePreviewKey] = React.useState(0);
   const [isSavingSubtitles, setIsSavingSubtitles] = React.useState(false);
+  const [compareMediaErrors, setCompareMediaErrors] = React.useState<{ original?: string; optimized?: string }>({});
   const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
   const [posterTimestamp, setPosterTimestamp] = React.useState(0);
   const sourcePreviewRef = React.useRef<HTMLVideoElement | null>(null);
@@ -523,19 +491,49 @@ function App() {
 
   const sourceUrl = video ? `${apiBaseUrl}/api/videos/${video.id}/source` : "";
   const sourceDownloadUrl = video ? `${apiBaseUrl}/api/videos/${video.id}/download` : "";
-  const outputUrl = job?.status === "completed" && (job.kind === "encode" || job.kind === "mux") ? `${apiBaseUrl}/api/jobs/${job.id}/output` : "";
+  const outputUrl =
+    job?.status === "completed" && (job.kind === "encode" || job.kind === "mux")
+      ? `${apiBaseUrl}/api/jobs/${job.id}/output`
+      : "";
   const downloadUrl = job?.status === "completed" ? `${apiBaseUrl}/api/jobs/${job.id}/download` : "";
   const posterUrl = posterJob?.status === "completed" ? `${apiBaseUrl}/api/jobs/${posterJob.id}/output` : "";
-  const activePosterUrl = activePosterPreview?.status === "completed" ? `${apiBaseUrl}/api/jobs/${activePosterPreview.id}/output` : "";
+  const activePosterUrl =
+    activePosterPreview?.status === "completed" ? `${apiBaseUrl}/api/jobs/${activePosterPreview.id}/output` : "";
   const estimate = video ? estimateOutputSize(video.metadata, settings) : undefined;
   const recommendations = video ? buildRecommendations(video.metadata, settings, estimate) : [];
   const videoMarkup = job ? buildVideoMarkup(job, job.settings) : "";
-  const completedReduction = video && job?.outputSize ? Math.round((1 - job.outputSize / video.metadata.fileSize) * 100) : undefined;
-  const completedEncodeJobs = video ? history.jobs.filter((historyJob) => historyJob.videoId === video.id && (historyJob.kind === "encode" || historyJob.kind === "mux") && historyJob.status === "completed") : [];
-  const hasModernExport = completedEncodeJobs.some((historyJob) => historyJob.settings.outputContainer === "webm" || historyJob.settings.videoCodec !== "libx264");
-  const hasFallbackExport = completedEncodeJobs.some((historyJob) => historyJob.settings.outputContainer === "mp4" && historyJob.settings.videoCodec === "libx264");
-  const hasPoster = posterJob?.status === "completed" || (video ? history.jobs.some((historyJob) => historyJob.videoId === video.id && historyJob.kind === "poster" && historyJob.status === "completed") : false);
-  const hasCaptions = subtitleJob?.status === "completed" || (video ? history.jobs.some((historyJob) => historyJob.videoId === video.id && historyJob.kind === "subtitle" && historyJob.status === "completed") : false);
+  const completedReduction =
+    video && job?.outputSize ? Math.round((1 - job.outputSize / video.metadata.fileSize) * 100) : undefined;
+  const completedEncodeJobs = video
+    ? history.jobs.filter(
+        (historyJob) =>
+          historyJob.videoId === video.id &&
+          (historyJob.kind === "encode" || historyJob.kind === "mux") &&
+          historyJob.status === "completed"
+      )
+    : [];
+  const hasModernExport = completedEncodeJobs.some(
+    (historyJob) => historyJob.settings.outputContainer === "webm" || historyJob.settings.videoCodec !== "libx264"
+  );
+  const hasFallbackExport = completedEncodeJobs.some(
+    (historyJob) => historyJob.settings.outputContainer === "mp4" && historyJob.settings.videoCodec === "libx264"
+  );
+  const hasPoster =
+    posterJob?.status === "completed" ||
+    (video
+      ? history.jobs.some(
+          (historyJob) =>
+            historyJob.videoId === video.id && historyJob.kind === "poster" && historyJob.status === "completed"
+        )
+      : false);
+  const hasCaptions =
+    subtitleJob?.status === "completed" ||
+    (video
+      ? history.jobs.some(
+          (historyJob) =>
+            historyJob.videoId === video.id && historyJob.kind === "subtitle" && historyJob.status === "completed"
+        )
+      : false);
   const currentVideoJobs = React.useMemo(() => {
     if (!video) return [];
     const byId = new Map<string, Job>();
@@ -547,20 +545,51 @@ function App() {
     }
     return Array.from(byId.values()).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }, [history.jobs, job, muxJob, packageJob, posterJob, sampleJob, subtitleJob, video]);
-  const packageCandidateJobs = currentVideoJobs.filter((historyJob) => historyJob.status === "completed" && (historyJob.kind === "encode" || historyJob.kind === "mux" || historyJob.kind === "poster" || historyJob.kind === "subtitle"));
-  const explicitPackageSelection = selectedPackageJobIds.filter((jobId) => packageCandidateJobs.some((historyJob) => historyJob.id === jobId));
-  const packageJobIds = explicitPackageSelection.length > 0 ? explicitPackageSelection : packageCandidateJobs.map((historyJob) => historyJob.id);
+  const packageCandidateJobs = currentVideoJobs.filter(
+    (historyJob) =>
+      historyJob.status === "completed" &&
+      (historyJob.kind === "encode" ||
+        historyJob.kind === "mux" ||
+        historyJob.kind === "poster" ||
+        historyJob.kind === "subtitle")
+  );
+  const explicitPackageSelection = selectedPackageJobIds.filter((jobId) =>
+    packageCandidateJobs.some((historyJob) => historyJob.id === jobId)
+  );
+  const packageJobIds =
+    explicitPackageSelection.length > 0
+      ? explicitPackageSelection
+      : packageCandidateJobs.map((historyJob) => historyJob.id);
   const bestSavingsJob = completedEncodeJobs
     .filter((historyJob) => historyJob.outputSize)
     .sort((a, b) => (a.outputSize ?? Infinity) - (b.outputSize ?? Infinity))[0];
-  const runningJobs = currentVideoJobs.filter((historyJob) => historyJob.status === "queued" || historyJob.status === "running");
-  const finishedOutputJobs = currentVideoJobs.filter((historyJob) => historyJob.status !== "queued" && historyJob.status !== "running");
+  const runningJobs = currentVideoJobs.filter(
+    (historyJob) => historyJob.status === "queued" || historyJob.status === "running"
+  );
+  const finishedOutputJobs = currentVideoJobs.filter(
+    (historyJob) => historyJob.status !== "queued" && historyJob.status !== "running"
+  );
   const completedOutputJobs = finishedOutputJobs.filter((historyJob) => historyJob.status === "completed");
   const selectedPackageJobs = packageCandidateJobs.filter((historyJob) => packageJobIds.includes(historyJob.id));
   const packagePreviewSize = selectedPackageJobs.reduce((sum, historyJob) => sum + (historyJob.outputSize ?? 0), 0);
-  const packageSavings = video && packagePreviewSize > 0 ? Math.round((1 - packagePreviewSize / video.metadata.fileSize) * 100) : undefined;
-  const packageMetadataReady = Boolean(packageMetadata.title.trim() && packageMetadata.description.trim() && packageMetadata.language.trim() && packageMetadata.filenamePrefix.trim());
-  const currentStatus = runningJobs.length > 0 ? `${runningJobs.length} running` : packageJob?.status === "completed" ? "Package ready" : completedOutputJobs.length > 0 ? "Outputs ready" : video ? "Ready" : "No video";
+  const packageSavings =
+    video && packagePreviewSize > 0 ? Math.round((1 - packagePreviewSize / video.metadata.fileSize) * 100) : undefined;
+  const packageMetadataReady = Boolean(
+    packageMetadata.title.trim() &&
+    packageMetadata.description.trim() &&
+    packageMetadata.language.trim() &&
+    packageMetadata.filenamePrefix.trim()
+  );
+  const currentStatus =
+    runningJobs.length > 0
+      ? `${runningJobs.length} running`
+      : packageJob?.status === "completed"
+        ? "Package ready"
+        : completedOutputJobs.length > 0
+          ? "Outputs ready"
+          : video
+            ? "Ready"
+            : "No video";
 
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -620,6 +649,7 @@ function App() {
 
   function loadVideoRecord(record: VideoRecord) {
     setVideo(record);
+    setCompareMediaErrors({});
     setSourceNameDraft(record.originalName);
     setActiveTab("workflow");
     setActiveView("prepare");
@@ -688,11 +718,9 @@ function App() {
   function mergeHistoryVideo(updated: VideoRecord) {
     setHistory((current) => ({
       ...current,
-      videos: current.videos.map((historyVideo) => (
-        historyVideo.id === updated.id
-          ? { ...historyVideo, ...updated, jobIds: historyVideo.jobIds }
-          : historyVideo
-      ))
+      videos: current.videos.map((historyVideo) =>
+        historyVideo.id === updated.id ? { ...historyVideo, ...updated, jobIds: historyVideo.jobIds } : historyVideo
+      )
     }));
   }
 
@@ -786,6 +814,7 @@ function App() {
 
   function startNewVideo() {
     setVideo(null);
+    setCompareMediaErrors({});
     setJob(null);
     setSampleJob(null);
     setPosterJob(null);
@@ -921,7 +950,10 @@ function App() {
     if (!response.ok) return;
     const updated = (await response.json()) as Job;
     if (updated.status === "canceled") {
-      setHistory((current) => ({ ...current, jobs: current.jobs.filter((historyJob) => historyJob.id !== updated.id) }));
+      setHistory((current) => ({
+        ...current,
+        jobs: current.jobs.filter((historyJob) => historyJob.id !== updated.id)
+      }));
       if (target.id === job?.id) setJob(null);
       if (target.id === sampleJob?.id) setSampleJob(null);
       if (target.id === posterJob?.id) setPosterJob(null);
@@ -1021,22 +1053,11 @@ function App() {
   }
 
   function updateOutputContainer(outputContainer: Settings["outputContainer"]) {
-    setSettings((current) => ({
-      ...current,
-      outputContainer,
-      videoCodec: outputContainer === "webm" && current.videoCodec === "libx264" ? "libaom-av1" : current.videoCodec,
-      audioCodec: outputContainer === "webm" ? "libopus" : "aac",
-      fastStart: outputContainer === "mp4" ? current.fastStart : false
-    }));
+    setSettings((current) => normalizeOutputContainerChange(current, outputContainer));
   }
 
   function updateVideoCodec(videoCodec: Settings["videoCodec"]) {
-    setSettings((current) => ({
-      ...current,
-      videoCodec,
-      outputContainer: videoCodec === "libvpx-vp9" ? "webm" : current.outputContainer,
-      audioCodec: videoCodec === "libvpx-vp9" ? "libopus" : current.audioCodec
-    }));
+    setSettings((current) => normalizeVideoCodecChange(current, videoCodec));
   }
 
   function applyTargetSize(targetMb: number) {
@@ -1051,9 +1072,18 @@ function App() {
       ...current,
       width: aggressive ? 854 : balanced ? 1280 : Math.min(video.metadata.width ?? 1920, 1920),
       frameRate: aggressive || (video.metadata.frameRate ?? 0) > 30 ? 24 : current.frameRate,
-      crf: current.videoCodec === "libx264"
-        ? aggressive ? 30 : balanced ? 27 : 24
-        : aggressive ? 38 : balanced ? 34 : 30,
+      crf:
+        current.videoCodec === "libx264"
+          ? aggressive
+            ? 30
+            : balanced
+              ? 27
+              : 24
+          : aggressive
+            ? 38
+            : balanced
+              ? 34
+              : 30,
       audioMode: hasAudio ? "compress" : "remove",
       audioBitrateKbps: aggressive ? 64 : balanced ? 96 : 128
     }));
@@ -1061,13 +1091,26 @@ function App() {
 
   function loadHistoryVideo(historyVideo: HistoryVideo) {
     setVideo(historyVideo);
+    setCompareMediaErrors({});
     setSourceNameDraft(historyVideo.originalName);
-    const latestEncode = history.jobs.find((historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "encode");
-    const latestPoster = history.jobs.find((historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "poster");
-    const latestSample = history.jobs.find((historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "sample");
-    const latestPackage = history.jobs.find((historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "package");
-    const latestSubtitle = history.jobs.find((historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "subtitle");
-    const latestMux = history.jobs.find((historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "mux");
+    const latestEncode = history.jobs.find(
+      (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "encode"
+    );
+    const latestPoster = history.jobs.find(
+      (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "poster"
+    );
+    const latestSample = history.jobs.find(
+      (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "sample"
+    );
+    const latestPackage = history.jobs.find(
+      (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "package"
+    );
+    const latestSubtitle = history.jobs.find(
+      (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "subtitle"
+    );
+    const latestMux = history.jobs.find(
+      (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "mux"
+    );
     setJob(latestEncode ?? null);
     setPosterJob(latestPoster ?? null);
     setSampleJob(latestSample ?? null);
@@ -1092,6 +1135,7 @@ function App() {
   }
 
   function selectVariation(nextJob: Job) {
+    setCompareMediaErrors({});
     if (nextJob.kind === "encode") setJob(nextJob);
     if (nextJob.kind === "sample") setSampleJob(nextJob);
     if (nextJob.kind === "poster") setPosterJob(nextJob);
@@ -1144,7 +1188,8 @@ function App() {
   }
 
   function variationLabel(nextJob: Job): string {
-    if (nextJob.kind === "encode" || nextJob.kind === "mux") return `${nextJob.settings.outputContainer.toUpperCase()} / ${codecLabel(nextJob.settings.videoCodec)}`;
+    if (nextJob.kind === "encode" || nextJob.kind === "mux")
+      return `${nextJob.settings.outputContainer.toUpperCase()} / ${codecLabel(nextJob.settings.videoCodec)}`;
     if (nextJob.kind === "sample") return "Sample estimate";
     if (nextJob.kind === "poster") return "Poster image";
     if (nextJob.kind === "subtitle") return "WebVTT + SRT captions";
@@ -1152,8 +1197,18 @@ function App() {
   }
 
   function jobTitle(nextJob: Job): string {
-    if (nextJob.kind === "encode" && nextJob.settings.outputContainer === "mp4" && nextJob.settings.videoCodec === "libx264") return "MP4 fallback";
-    if (nextJob.kind === "encode" && nextJob.settings.outputContainer === "webm" && nextJob.settings.videoCodec === "libaom-av1") return "Modern AV1";
+    if (
+      nextJob.kind === "encode" &&
+      nextJob.settings.outputContainer === "mp4" &&
+      nextJob.settings.videoCodec === "libx264"
+    )
+      return "MP4 fallback";
+    if (
+      nextJob.kind === "encode" &&
+      nextJob.settings.outputContainer === "webm" &&
+      nextJob.settings.videoCodec === "libaom-av1"
+    )
+      return "Modern AV1";
     if (nextJob.kind === "encode" && nextJob.settings.outputContainer === "webm") return "Modern WebM";
     if (nextJob.kind === "encode" && nextJob.settings.videoCodec !== "libx264") return "Modern MP4";
     if (nextJob.kind === "encode") return "Custom export";
@@ -1173,7 +1228,10 @@ function App() {
     if (nextJob.kind === "encode") {
       const dimensions = nextJob.settings.width ? `${nextJob.settings.width}px wide` : "source size";
       const frameRate = nextJob.settings.frameRate ? `${nextJob.settings.frameRate} fps` : "source fps";
-      const audio = nextJob.settings.audioMode === "remove" ? "no audio" : `${nextJob.settings.audioCodec === "aac" ? "AAC" : "Opus"} audio`;
+      const audio =
+        nextJob.settings.audioMode === "remove"
+          ? "no audio"
+          : `${nextJob.settings.audioCodec === "aac" ? "AAC" : "Opus"} audio`;
       return `${dimensions} / ${frameRate} / CRF ${nextJob.settings.crf} / ${audio}`;
     }
     if (nextJob.kind === "sample" && nextJob.sampleEstimate) {
@@ -1186,9 +1244,19 @@ function App() {
 
   function variationBadges(nextJob: Job): string[] {
     const badges: string[] = [];
-    if ((nextJob.kind === "encode" || nextJob.kind === "mux") && nextJob.settings.outputContainer === "mp4" && nextJob.settings.videoCodec === "libx264") badges.push("Best fallback");
-    if ((nextJob.kind === "encode" || nextJob.kind === "mux") && (nextJob.settings.outputContainer === "webm" || nextJob.settings.videoCodec !== "libx264")) badges.push("Modern source");
-    if ((nextJob.kind === "encode" || nextJob.kind === "mux") && nextJob.settings.audioMode === "remove") badges.push("Silent loop ready");
+    if (
+      (nextJob.kind === "encode" || nextJob.kind === "mux") &&
+      nextJob.settings.outputContainer === "mp4" &&
+      nextJob.settings.videoCodec === "libx264"
+    )
+      badges.push("Best fallback");
+    if (
+      (nextJob.kind === "encode" || nextJob.kind === "mux") &&
+      (nextJob.settings.outputContainer === "webm" || nextJob.settings.videoCodec !== "libx264")
+    )
+      badges.push("Modern source");
+    if ((nextJob.kind === "encode" || nextJob.kind === "mux") && nextJob.settings.audioMode === "remove")
+      badges.push("Silent loop ready");
     if (nextJob.kind === "mux") badges.push("Embedded captions");
     if (bestSavingsJob?.id === nextJob.id) badges.push("Smallest export");
     if (nextJob.kind === "poster") badges.push("SEO/helper asset");
@@ -1248,9 +1316,10 @@ function App() {
   }
 
   async function muxSubtitlesIntoVideo(target: Job) {
-    const captions = subtitleJob?.status === "completed"
-      ? subtitleJob
-      : currentVideoJobs.find((historyJob) => historyJob.kind === "subtitle" && historyJob.status === "completed");
+    const captions =
+      subtitleJob?.status === "completed"
+        ? subtitleJob
+        : currentVideoJobs.find((historyJob) => historyJob.kind === "subtitle" && historyJob.status === "completed");
     if (!captions) {
       setError("Generate subtitles before embedding them into a video file.");
       return;
@@ -1325,16 +1394,24 @@ function App() {
         <div className="sidebar-section">
           <div className="sidebar-section-title">
             <span>Library</span>
-            <button className="mini-button" type="button" onClick={() => void refreshHistory()}>Refresh</button>
+            <button className="mini-button" type="button" onClick={() => void refreshHistory()}>
+              Refresh
+            </button>
           </div>
           <div className="sidebar-list">
             {history.videos.length === 0 && <p className="sidebar-empty">No uploads yet.</p>}
             {history.videos.map((historyVideo) => (
-              <button className={`sidebar-file ${video?.id === historyVideo.id ? "active" : ""}`} key={historyVideo.id} onClick={() => loadHistoryVideo(historyVideo)}>
+              <button
+                className={`sidebar-file ${video?.id === historyVideo.id ? "active" : ""}`}
+                key={historyVideo.id}
+                onClick={() => loadHistoryVideo(historyVideo)}
+              >
                 <FileVideo size={16} />
                 <span>
                   <strong>{historyVideo.originalName}</strong>
-                  <em>{formatBytes(historyVideo.metadata.fileSize)} / {historyVideo.jobIds.length} outputs</em>
+                  <em>
+                    {formatBytes(historyVideo.metadata.fileSize)} / {historyVideo.jobIds.length} outputs
+                  </em>
                 </span>
               </button>
             ))}
@@ -1342,11 +1419,22 @@ function App() {
         </div>
 
         <div className="sidebar-footer">
-          <button className="utility-button wide" type="button" onClick={() => { setActiveTab(activeTab === "history" ? "workflow" : "history"); void refreshHistory(); }}>
+          <button
+            className="utility-button wide"
+            type="button"
+            onClick={() => {
+              setActiveTab(activeTab === "history" ? "workflow" : "history");
+              void refreshHistory();
+            }}
+          >
             <History size={18} />
             {activeTab === "history" ? "Workflow" : "Manage Library"}
           </button>
-          <button className="utility-button wide" type="button" onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}>
+          <button
+            className="utility-button wide"
+            type="button"
+            onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
+          >
             {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
             {theme === "dark" ? "Light Mode" : "Dark Mode"}
           </button>
@@ -1354,904 +1442,1426 @@ function App() {
       </aside>
 
       <section className="workspace">
-      <header className="topbar">
-        <div className="brand">
-          <div>
-            <p className="eyebrow">Local-first FFmpeg workflow</p>
-            <h1>Web Video Optimizer</h1>
-            <p className="subtitle">Upload a video, let the app recommend a web package, then fine-tune only when you need to.</p>
+        <header className="topbar">
+          <div className="brand">
+            <div>
+              <p className="eyebrow">Local-first FFmpeg workflow</p>
+              <h1>Web Video Optimizer</h1>
+              <p className="subtitle">
+                Upload a video, let the app recommend a web package, then fine-tune only when you need to.
+              </p>
+            </div>
           </div>
-        </div>
-        <div className="top-actions">
-          <div className={`status-pill ${runningJobs.length > 0 ? "running" : ""}`}>
-            {currentStatus}
+          <div className="top-actions">
+            <div className={`status-pill ${runningJobs.length > 0 ? "running" : ""}`}>{currentStatus}</div>
+            <div className="privacy">
+              <ShieldCheck size={17} />
+              Local only
+            </div>
           </div>
-          <div className="privacy">
-            <ShieldCheck size={17} />
-            Local only
-          </div>
-        </div>
-      </header>
+        </header>
 
-      {error && (
-        <div className="notice error global-error">
-          {error}
-        </div>
-      )}
+        {error && <div className="notice error global-error">{error}</div>}
 
-      {activeTab === "workflow" && (
-        <nav className="workflow" aria-label="Workspace views">
-          <button className={`workflow-step ${activeView === "prepare" ? "active" : ""}`} type="button" onClick={() => setActiveView("prepare")}>
-            <UploadCloud size={17} />
-            Prepare
-          </button>
-          <button className={`workflow-step ${activeView === "outputs" ? "active" : ""}`} type="button" onClick={() => setActiveView("outputs")} disabled={!video}>
-            <Package size={17} />
-            Jobs & Outputs
-            {currentVideoJobs.length > 0 && <span>{currentVideoJobs.length}</span>}
-          </button>
-          <button className={`workflow-step ${activeView === "custom" ? "active" : ""}`} type="button" onClick={() => setActiveView("custom")} disabled={!video}>
-            <Settings2 size={17} />
-            Custom
-          </button>
-        </nav>
-      )}
-
-      {activeTab === "history" && (
-        <section className="workflow-section">
-          <SectionHeader icon={<History size={21} />} title="History" kicker="Bring back previous uploads and outputs from this app session, or clean them up individually or in bulk." />
-          <div className="history-actions">
-            <button className="button secondary" onClick={() => void refreshHistory()}>Refresh</button>
-            <button className="button secondary" disabled={selectedVideoIds.length + selectedJobIds.length === 0} onClick={() => void deleteHistoryItems()}>
-              <Trash2 size={18} />
-              Delete Selected
+        {activeTab === "workflow" && (
+          <nav className="workflow" aria-label="Workspace views">
+            <button
+              className={`workflow-step ${activeView === "prepare" ? "active" : ""}`}
+              type="button"
+              onClick={() => setActiveView("prepare")}
+            >
+              <UploadCloud size={17} />
+              Prepare
             </button>
-          </div>
-          <div className="history-layout">
-            <div className="panel">
-              <SectionHeader icon={<FileVideo size={20} />} title="Uploaded Files" />
-              <div className="history-list">
-                {history.videos.length === 0 && <p className="muted">No uploaded files yet.</p>}
-                {history.videos.map((historyVideo) => (
-                  <div className="history-item" key={historyVideo.id}>
-                    <input type="checkbox" checked={selectedVideoIds.includes(historyVideo.id)} onChange={() => setSelectedVideoIds((current) => toggleSelected(current, historyVideo.id))} />
-                    <button className="history-main" onClick={() => loadHistoryVideo(historyVideo)}>
-                      <strong>{historyVideo.originalName}</strong>
-                      <span>{formatBytes(historyVideo.metadata.fileSize)} / {formatDuration(historyVideo.metadata.durationSeconds)} / {historyVideo.jobIds.length} jobs</span>
-                    </button>
-                    <button className="icon-button danger-button" onClick={() => void deleteHistoryItems([historyVideo.id], [])} aria-label="Delete file">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="panel">
-              <SectionHeader icon={<Package size={20} />} title="Jobs & Outputs" />
-              <div className="history-list">
-                {history.jobs.length === 0 && <p className="muted">No jobs yet.</p>}
-                {history.jobs.map((historyJob) => (
-                  <div className="history-item" key={historyJob.id}>
-                    <input type="checkbox" checked={selectedJobIds.includes(historyJob.id)} onChange={() => setSelectedJobIds((current) => toggleSelected(current, historyJob.id))} />
-                    <button className="history-main" onClick={() => {
-                      const owningVideo = history.videos.find((historyVideo) => historyVideo.id === historyJob.videoId);
-                      if (owningVideo) loadHistoryVideo(owningVideo);
-                      setJob(historyJob.kind === "encode" ? historyJob : job);
-                      setSampleJob(historyJob.kind === "sample" ? historyJob : sampleJob);
-                      setPosterJob(historyJob.kind === "poster" ? historyJob : posterJob);
-                      setPackageJob(historyJob.kind === "package" ? historyJob : packageJob);
-                      setSubtitleJob(historyJob.kind === "subtitle" ? historyJob : subtitleJob);
-                      setMuxJob(historyJob.kind === "mux" ? historyJob : muxJob);
-                    }}>
-                      <strong>{historyJob.outputFileName ?? historyJob.id}</strong>
-                      <span>{historyJob.kind} / {historyJob.status} / {formatBytes(historyJob.outputSize)}</span>
-                    </button>
-                    {historyJob.status === "running" && (
-                      <button className="button secondary" onClick={() => void cancelJob(historyJob)}>Cancel</button>
-                    )}
-                    <button className="icon-button danger-button" onClick={() => void deleteHistoryItems([], [historyJob.id])} aria-label="Delete job">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
+            <button
+              className={`workflow-step ${activeView === "outputs" ? "active" : ""}`}
+              type="button"
+              onClick={() => setActiveView("outputs")}
+              disabled={!video}
+            >
+              <Package size={17} />
+              Jobs & Outputs
+              {currentVideoJobs.length > 0 && <span>{currentVideoJobs.length}</span>}
+            </button>
+            <button
+              className={`workflow-step ${activeView === "custom" ? "active" : ""}`}
+              type="button"
+              onClick={() => setActiveView("custom")}
+              disabled={!video}
+            >
+              <Settings2 size={17} />
+              Custom
+            </button>
+          </nav>
+        )}
 
-      {activeTab === "workflow" && (
-      <>
-      {activeView === "prepare" && (
-      <section className="workflow-section" id="upload">
-        <SectionHeader icon={<UploadCloud size={21} />} title="Upload & Inspect" kicker="Start with a local source file. The app analyzes it with FFprobe and keeps everything on this machine." />
-        <div className="assistant-card">
-          <div className="assistant-avatar">
-            <Sparkles size={19} />
-          </div>
-          <div className="assistant-message">
-            <strong>{video ? `I inspected ${video.originalName}.` : "Drop in a video and I will prep it for the web."}</strong>
-            <p>
-              {video
-                ? `Source is ${formatBytes(video.metadata.fileSize)}, ${formatDuration(video.metadata.durationSeconds)}, ${video.metadata.width ?? "unknown"} x ${video.metadata.height ?? "unknown"}. Recommended path: create an MP4 fallback, a modern WebM source, and a WebP poster image.`
-                : "The simplest path is one button: upload, optimize for website delivery, compare, then download a package."}
-            </p>
-            <div className="actions">
-              <button className="button primary" onClick={optimizeForWebsite} disabled={!video || job?.status === "running" || posterJob?.status === "running"}>
-                <Wand2 size={18} />
-                Optimize For Website
+        {activeTab === "history" && (
+          <section className="workflow-section">
+            <SectionHeader
+              icon={<History size={21} />}
+              title="History"
+              kicker="Bring back previous uploads and outputs from this app session, or clean them up individually or in bulk."
+            />
+            <div className="history-actions">
+              <button className="button secondary" onClick={() => void refreshHistory()}>
+                Refresh
               </button>
-              <button className="button secondary" type="button" onClick={() => setActiveView("custom")} disabled={!video}>
-                <Settings2 size={18} />
-                Choose Custom Export
+              <button
+                className="button secondary"
+                disabled={selectedVideoIds.length + selectedJobIds.length === 0}
+                onClick={() => void deleteHistoryItems()}
+              >
+                <Trash2 size={18} />
+                Delete Selected
               </button>
-              {video && (
-                <button className="button secondary" type="button" onClick={() => setActiveView("outputs")}>
-                  <Package size={18} />
-                  View Jobs & Outputs
-                </button>
-              )}
             </div>
-          </div>
-        </div>
-        <div className="upload-layout">
-          <div
-            className="dropzone"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={(event) => {
-              event.preventDefault();
-              const file = event.dataTransfer.files[0];
-              if (file) uploadFile(file);
-            }}
-          >
-            {video ? (
-              <div className="upload-preview">
-                <video
-                  controls
-                  ref={sourcePreviewRef}
-                  src={sourceUrl}
-                  onTimeUpdate={(event) => setPosterTimestamp(Math.round(event.currentTarget.currentTime * 10) / 10)}
+            <div className="history-layout">
+              <div className="panel">
+                <SectionHeader icon={<FileVideo size={20} />} title="Uploaded Files" />
+                <div className="history-list">
+                  {history.videos.length === 0 && <p className="muted">No uploaded files yet.</p>}
+                  {history.videos.map((historyVideo) => (
+                    <div className="history-item" key={historyVideo.id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedVideoIds.includes(historyVideo.id)}
+                        onChange={() => setSelectedVideoIds((current) => toggleSelected(current, historyVideo.id))}
+                      />
+                      <button className="history-main" onClick={() => loadHistoryVideo(historyVideo)}>
+                        <strong>{historyVideo.originalName}</strong>
+                        <span>
+                          {formatBytes(historyVideo.metadata.fileSize)} /{" "}
+                          {formatDuration(historyVideo.metadata.durationSeconds)} / {historyVideo.jobIds.length} jobs
+                        </span>
+                      </button>
+                      <button
+                        className="icon-button danger-button"
+                        onClick={() => void deleteHistoryItems([historyVideo.id], [])}
+                        aria-label="Delete file"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="panel">
+                <SectionHeader icon={<Package size={20} />} title="Jobs & Outputs" />
+                <div className="history-list">
+                  {history.jobs.length === 0 && <p className="muted">No jobs yet.</p>}
+                  {history.jobs.map((historyJob) => (
+                    <div className="history-item" key={historyJob.id}>
+                      <input
+                        type="checkbox"
+                        checked={selectedJobIds.includes(historyJob.id)}
+                        onChange={() => setSelectedJobIds((current) => toggleSelected(current, historyJob.id))}
+                      />
+                      <button
+                        className="history-main"
+                        onClick={() => {
+                          const owningVideo = history.videos.find(
+                            (historyVideo) => historyVideo.id === historyJob.videoId
+                          );
+                          if (owningVideo) loadHistoryVideo(owningVideo);
+                          setJob(historyJob.kind === "encode" ? historyJob : job);
+                          setSampleJob(historyJob.kind === "sample" ? historyJob : sampleJob);
+                          setPosterJob(historyJob.kind === "poster" ? historyJob : posterJob);
+                          setPackageJob(historyJob.kind === "package" ? historyJob : packageJob);
+                          setSubtitleJob(historyJob.kind === "subtitle" ? historyJob : subtitleJob);
+                          setMuxJob(historyJob.kind === "mux" ? historyJob : muxJob);
+                        }}
+                      >
+                        <strong>{historyJob.outputFileName ?? historyJob.id}</strong>
+                        <span>
+                          {historyJob.kind} / {historyJob.status} / {formatBytes(historyJob.outputSize)}
+                        </span>
+                      </button>
+                      {historyJob.status === "running" && (
+                        <button className="button secondary" onClick={() => void cancelJob(historyJob)}>
+                          Cancel
+                        </button>
+                      )}
+                      <button
+                        className="icon-button danger-button"
+                        onClick={() => void deleteHistoryItems([], [historyJob.id])}
+                        aria-label="Delete job"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {activeTab === "workflow" && (
+          <>
+            {activeView === "prepare" && (
+              <section className="workflow-section" id="upload">
+                <SectionHeader
+                  icon={<UploadCloud size={21} />}
+                  title="Upload & Inspect"
+                  kicker="Start with a local source file. The app analyzes it with FFprobe and keeps everything on this machine."
                 />
-                <div className="preview-meta">
-                  <div className="name-editor source-name-editor">
-                    <input
-                      value={sourceNameDraft}
-                      onChange={(event) => setSourceNameDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void renameSource();
-                      }}
-                      aria-label="Source filename"
-                    />
-                    <button className="button secondary" type="button" onClick={() => void renameSource()} disabled={renamingSource || sourceNameDraft.trim() === video.originalName}>
-                      <Save size={16} />
-                      Save
-                    </button>
+                <div className="assistant-card">
+                  <div className="assistant-avatar">
+                    <Sparkles size={19} />
                   </div>
-                  <p>
-                    {formatBytes(video.metadata.fileSize)} / {formatDuration(video.metadata.durationSeconds)} / {video.metadata.width} x {video.metadata.height}
-                  </p>
-                </div>
-                <div className="poster-picker">
-                  <div>
-                    <strong>Poster frame</strong>
-                    <span>{formatDuration(posterTimestamp)} selected</span>
-                  </div>
-                  <a className="button secondary" href={sourceDownloadUrl}>
-                    <Download size={18} />
-                    Source
-                  </a>
-                  <button className="button secondary" onClick={useCurrentPreviewFrame}>
-                    <Image size={18} />
-                    Use Current Frame
-                  </button>
-                  <button className="button secondary" onClick={startPosterJob} disabled={posterJob?.status === "running"}>
-                    Generate Poster
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="upload-icon">
-                  <UploadCloud size={34} />
-                </div>
-                <h2>Drop a video file</h2>
-                <p>{isUploading ? importStatus || "Importing and analyzing video..." : "Choose a file, drag one here, or import a permitted YouTube video."}</p>
-              </>
-            )}
-            <label className="button secondary">
-              {video ? "Replace Video" : "Select Video"}
-              <input type="file" accept="video/*" onChange={(event) => event.target.files?.[0] && uploadFile(event.target.files[0])} />
-            </label>
-            <div className="url-import">
-              <span>Import from YouTube</span>
-              <div>
-                <input
-                  type="url"
-                  value={videoUrl}
-                  placeholder="https://www.youtube.com/watch?v=..."
-                  disabled={isUploading || capabilities?.ytDlp === false}
-                  onChange={(event) => setVideoUrl(event.target.value)}
-                />
-                <button className="button secondary" type="button" onClick={() => void importVideoUrl()} disabled={isUploading || !videoUrl.trim() || capabilities?.ytDlp === false}>
-                  Import URL
-                </button>
-              </div>
-              <em>{isUploading && importStatus ? importStatus : capabilities?.ytDlp === false ? "Install yt-dlp or set YT_DLP_BIN to enable URL imports." : "Use this only for videos you own or have permission to download."}</em>
-            </div>
-          </div>
-
-          {video ? (
-            <div className="panel">
-              <SectionHeader icon={<FileVideo size={20} />} title="Source Details" />
-              <div className="metric-strip">
-                <div>
-                  <span>Name</span>
-                  <strong>{video.originalName}</strong>
-                </div>
-                <div>
-                  <span>Source</span>
-                  <strong>{formatBytes(video.metadata.fileSize)}</strong>
-                </div>
-                <div>
-                  <span>Duration</span>
-                  <strong>{formatDuration(video.metadata.durationSeconds)}</strong>
-                </div>
-                <div>
-                  <span>Bitrate</span>
-                  <strong>{formatBitrate(video.metadata.overallBitrate)}</strong>
-                </div>
-              </div>
-              <div className={video.metadata.webFriendly ? "notice good" : "notice warn"}>
-                {video.metadata.webFriendly ? "Looks web-friendly." : "Compatibility review recommended."}
-              </div>
-              <a className="button secondary wide" href={sourceDownloadUrl}>
-                <Download size={18} />
-                Download Original Source
-              </a>
-              {video.metadata.warnings.map((warning) => (
-                <div className="notice warn" key={warning}>{warning}</div>
-              ))}
-              <div className="subtitle-status">
-                <div>
-                  <Captions size={20} />
-                  <span>
-                    <strong>Subtitles</strong>
-                    <em>
-                      {video.metadata.trackCounts.subtitle > 0
-                        ? `${video.metadata.trackCounts.subtitle} embedded subtitle track${video.metadata.trackCounts.subtitle === 1 ? "" : "s"} found`
-                        : video.metadata.trackCounts.audio === 0
-                          ? "No audio track found"
-                          : capabilities?.whisperCpp && capabilities?.whisperModel
-                            ? "No embedded subtitles. Ready to generate captions locally."
-                            : "No embedded subtitles. Configure whisper.cpp to generate captions."}
-                    </em>
-                  </span>
-                </div>
-                <button
-                  className="button secondary"
-                  onClick={startSubtitleJob}
-                  disabled={video.metadata.trackCounts.audio === 0 || subtitleJob?.status === "running" || !capabilities?.whisperCpp || !capabilities?.whisperModel}
-                >
-                  <Captions size={18} />
-                  {subtitleJob?.status === "running" ? "Generating..." : "Generate Subtitles"}
-                </button>
-              </div>
-              {capabilities && (!capabilities.whisperCpp || !capabilities.whisperModel) && video.metadata.trackCounts.audio > 0 && (
-                <div className="notice info">
-                  Subtitle generation needs whisper.cpp and a model. Set WHISPER_CPP_BIN and WHISPER_CPP_MODEL before starting the API.
-                </div>
-              )}
-              <details className="details-panel">
-                <summary>Technical details</summary>
-                <div className="fields">
-                  <Field label="Container" value={video.metadata.container} />
-                  <Field label="Video codec" value={video.metadata.videoCodec} />
-                  <Field label="Audio codec" value={video.metadata.audioCodec} />
-                  <Field label="Resolution" value={video.metadata.width && video.metadata.height ? `${video.metadata.width} x ${video.metadata.height}` : undefined} />
-                  <Field label="Frame rate" value={video.metadata.frameRate ? `${video.metadata.frameRate} fps` : undefined} />
-                  <Field label="Video bitrate" value={formatBitrate(video.metadata.videoBitrate)} />
-                  <Field label="Audio bitrate" value={formatBitrate(video.metadata.audioBitrate)} />
-                  <Field label="Pixel format" value={video.metadata.pixelFormat} />
-                  <Field label="Audio sample rate" value={video.metadata.audioSampleRate ? `${video.metadata.audioSampleRate} Hz` : undefined} />
-                  <Field label="Tracks" value={`${video.metadata.trackCounts.video} video, ${video.metadata.trackCounts.audio} audio, ${video.metadata.trackCounts.subtitle} subtitle`} />
-                </div>
-              </details>
-            </div>
-          ) : (
-            <div className="panel empty-panel">
-              <SectionHeader icon={<Gauge size={20} />} title="Waiting For A Source" />
-              <p className="muted">After upload, this panel will show codecs, bitrate, dimensions, track counts, compatibility notes, and web-delivery warnings.</p>
-            </div>
-          )}
-        </div>
-      </section>
-      )}
-
-      {video && activeView === "outputs" && (
-        <section className="workflow-section" id="variations">
-          <SectionHeader icon={<Package size={21} />} title="Jobs & Outputs" kicker="Watch active work, review finished files, and build a website-ready package." />
-          <div className="outputs-layout">
-            <div className="outputs-main">
-              <section className="panel job-queue">
-                <SectionHeader icon={<Gauge size={20} />} title="Current Jobs" />
-                {runningJobs.length === 0 ? (
-                  <p className="muted">No jobs running. Start the recommended website package or create a custom export.</p>
-                ) : (
-                  <div className="job-list">
-                    {runningJobs.map((runningJob) => (
-                      <div className="job-row" key={runningJob.id}>
-                        <div>
-                          <strong>{jobTitle(runningJob)}</strong>
-                          <span>{runningJob.message ?? runningJob.status}</span>
-                        </div>
-                        <progress value={runningJob.progress} max="100" />
-                        <button className="button secondary" onClick={() => void cancelJob(runningJob)}>Cancel</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </section>
-
-              <section className="output-cards">
-                {finishedOutputJobs.length === 0 ? (
-                  <div className="panel empty-panel">
-                    <SectionHeader icon={<Package size={20} />} title="No Outputs Yet" />
-                    <p className="muted">Use Optimize For Website to create an MP4 fallback, modern video, and poster, or go to Custom for manual settings.</p>
+                  <div className="assistant-message">
+                    <strong>
+                      {video ? `I inspected ${video.originalName}.` : "Drop in a video and I will prep it for the web."}
+                    </strong>
+                    <p>
+                      {video
+                        ? `Source is ${formatBytes(video.metadata.fileSize)}, ${formatDuration(video.metadata.durationSeconds)}, ${video.metadata.width ?? "unknown"} x ${video.metadata.height ?? "unknown"}. Recommended path: create an MP4 fallback, a modern WebM source, and a WebP poster image.`
+                        : "The simplest path is one button: upload, optimize for website delivery, compare, then download a package."}
+                    </p>
                     <div className="actions">
-                      <button className="button primary" onClick={optimizeForWebsite}>
+                      <button
+                        className="button primary"
+                        onClick={optimizeForWebsite}
+                        disabled={!video || job?.status === "running" || posterJob?.status === "running"}
+                      >
                         <Wand2 size={18} />
                         Optimize For Website
                       </button>
-                      <button className="button secondary" onClick={() => setActiveView("custom")}>
+                      <button
+                        className="button secondary"
+                        type="button"
+                        onClick={() => setActiveView("custom")}
+                        disabled={!video}
+                      >
                         <Settings2 size={18} />
-                        Custom Export
+                        Choose Custom Export
                       </button>
+                      {video && (
+                        <button className="button secondary" type="button" onClick={() => setActiveView("outputs")}>
+                          <Package size={18} />
+                          View Jobs & Outputs
+                        </button>
+                      )}
                     </div>
                   </div>
-                ) : finishedOutputJobs.map((output) => {
-                  const canInclude = output.status === "completed" && (output.kind === "encode" || output.kind === "mux" || output.kind === "poster" || output.kind === "subtitle");
-                  const packageChecked = canInclude && packageCandidateJobs.length > 0 && (selectedPackageJobIds.length === 0 ? true : selectedPackageJobIds.includes(output.id));
-                  const failed = output.status === "failed" || output.status === "canceled";
-                  return (
-                    <article className={`output-card ${failed ? "failed" : ""} ${output.id === job?.id || output.id === posterJob?.id || output.id === packageJob?.id || output.id === subtitleJob?.id || output.id === muxJob?.id ? "active" : ""}`} key={output.id}>
-                      <div className="output-card-main">
-                        <span className="output-kind">{jobTitle(output)}</span>
-                        {output.outputFileName ? (
-                          <div className="name-editor output-name-editor">
+                </div>
+                <div className="upload-layout">
+                  <div
+                    className="dropzone"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const file = event.dataTransfer.files[0];
+                      if (file) uploadFile(file);
+                    }}
+                  >
+                    {video ? (
+                      <div className="upload-preview">
+                        <video
+                          controls
+                          ref={sourcePreviewRef}
+                          src={sourceUrl}
+                          onTimeUpdate={(event) =>
+                            setPosterTimestamp(Math.round(event.currentTarget.currentTime * 10) / 10)
+                          }
+                        />
+                        <div className="preview-meta">
+                          <div className="name-editor source-name-editor">
                             <input
-                              value={jobNameDrafts[output.id] ?? output.outputFileName}
-                              onChange={(event) => setJobNameDrafts((current) => ({ ...current, [output.id]: event.target.value }))}
+                              value={sourceNameDraft}
+                              onChange={(event) => setSourceNameDraft(event.target.value)}
                               onKeyDown={(event) => {
-                                if (event.key === "Enter") void renameJobOutput(output);
+                                if (event.key === "Enter") void renameSource();
                               }}
-                              aria-label={`Filename for ${output.outputFileName}`}
+                              aria-label="Source filename"
                             />
                             <button
-                              className="icon-button"
+                              className="button secondary"
                               type="button"
-                              onClick={() => void renameJobOutput(output)}
-                              disabled={renamingJobId === output.id || (jobNameDrafts[output.id] ?? output.outputFileName).trim() === output.outputFileName}
-                              aria-label="Save output filename"
+                              onClick={() => void renameSource()}
+                              disabled={renamingSource || sourceNameDraft.trim() === video.originalName}
                             >
-                              <Save size={15} />
+                              <Save size={16} />
+                              Save
                             </button>
                           </div>
-                        ) : (
-                          <h3>{output.id}</h3>
-                        )}
-                        <p>{failed ? output.message ?? output.status : variationDetails(output)}</p>
-                        {output.status === "completed" && output.kind === "poster" && (
-                          <button className="poster-thumb" type="button" onClick={() => openPosterLightbox(output)}>
-                            <img src={`${apiBaseUrl}/api/jobs/${output.id}/output`} alt={`${output.outputFileName ?? "Generated poster"} preview`} />
-                            <span>Preview poster</span>
+                          <p>
+                            {formatBytes(video.metadata.fileSize)} / {formatDuration(video.metadata.durationSeconds)} /{" "}
+                            {video.metadata.width} x {video.metadata.height}
+                          </p>
+                        </div>
+                        <div className="poster-picker">
+                          <div>
+                            <strong>Poster frame</strong>
+                            <span>{formatDuration(posterTimestamp)} selected</span>
+                          </div>
+                          <a className="button secondary" href={sourceDownloadUrl}>
+                            <Download size={18} />
+                            Source
+                          </a>
+                          <button className="button secondary" onClick={useCurrentPreviewFrame}>
+                            <Image size={18} />
+                            Use Current Frame
                           </button>
-                        )}
-                        <div className="badge-row">
-                          {failed ? <b>{output.status}</b> : variationBadges(output).map((badge) => <b key={badge}>{badge}</b>)}
+                          <button
+                            className="button secondary"
+                            onClick={startPosterJob}
+                            disabled={posterJob?.status === "running"}
+                          >
+                            Generate Poster
+                          </button>
                         </div>
                       </div>
-                      <div className="output-card-stats">
-                        <Field label="Status" value={output.status} />
-                        <Field label="Size" value={formatBytes(output.outputSize)} />
-                      </div>
-                      <div className="output-card-actions">
-                        {canInclude && (
-                          <label className="package-check">
-                            <input type="checkbox" checked={packageChecked} onChange={() => togglePackageJob(output.id)} />
-                            Use in package
-                          </label>
-                        )}
-                        {output.status === "completed" && (output.kind === "encode" || output.kind === "mux") && (
-                          <button className="button secondary" onClick={() => selectVariation(output)}>
-                            <Layers size={17} />
-                            Compare
-                          </button>
-                        )}
-                        {output.status === "completed" && (output.kind === "encode" || output.kind === "mux") && hasCaptions && (
-                          <button className="button secondary" onClick={() => void muxSubtitlesIntoVideo(output)}>
-                            <Captions size={17} />
-                            Embed Captions
-                          </button>
-                        )}
-                        {output.status === "completed" && (
-                          <>
-                            {output.kind === "poster" && (
-                              <button className="button secondary" onClick={() => openPosterLightbox(output)}>
-                                <Image size={17} />
-                                Preview
-                              </button>
-                            )}
-                            {output.kind === "subtitle" && (
-                              <button className="button secondary" onClick={() => void openSubtitleEditor(output)}>
-                                <Edit3 size={17} />
-                                Edit
-                              </button>
-                            )}
-                            <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${output.id}/download`}>
-                              <Download size={17} />
-                              {output.kind === "subtitle" ? "VTT" : "Download"}
-                            </a>
-                            {output.kind === "subtitle" && output.sidecarFileName && (
-                              <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${output.id}/sidecar`}>
-                                <Download size={17} />
-                                SRT
-                              </a>
-                            )}
-                            <button className="button secondary" onClick={() => void revealJobOutput(output)}>
-                              <FolderOpen size={17} />
-                              Folder
-                            </button>
-                          </>
-                        )}
-                        {failed && output.ffmpegCommand && (
-                          <button className="button secondary" onClick={() => navigator.clipboard.writeText(output.ffmpegCommand)}>
-                            <Copy size={17} />
-                            Copy Command
-                          </button>
-                        )}
-                        <button className="icon-button danger-button" onClick={() => void deleteHistoryItems([], [output.id])} aria-label="Delete output">
-                          <Trash2 size={16} />
+                    ) : (
+                      <>
+                        <div className="upload-icon">
+                          <UploadCloud size={34} />
+                        </div>
+                        <h2>Drop a video file</h2>
+                        <p>
+                          {isUploading
+                            ? importStatus || "Importing and analyzing video..."
+                            : "Choose a file, drag one here, or import a permitted YouTube video."}
+                        </p>
+                      </>
+                    )}
+                    <label className="button secondary">
+                      {video ? "Replace Video" : "Select Video"}
+                      <input
+                        type="file"
+                        accept="video/*"
+                        onChange={(event) => event.target.files?.[0] && uploadFile(event.target.files[0])}
+                      />
+                    </label>
+                    <div className="url-import">
+                      <span>Import from YouTube</span>
+                      <div>
+                        <input
+                          type="url"
+                          value={videoUrl}
+                          placeholder="https://www.youtube.com/watch?v=..."
+                          disabled={isUploading || capabilities?.ytDlp === false}
+                          onChange={(event) => setVideoUrl(event.target.value)}
+                        />
+                        <button
+                          className="button secondary"
+                          type="button"
+                          onClick={() => void importVideoUrl()}
+                          disabled={isUploading || !videoUrl.trim() || capabilities?.ytDlp === false}
+                        >
+                          Import URL
                         </button>
                       </div>
-                    </article>
-                  );
-                })}
+                      <em>
+                        {isUploading && importStatus
+                          ? importStatus
+                          : capabilities?.ytDlp === false
+                            ? "Install yt-dlp or set YT_DLP_BIN to enable URL imports."
+                            : "Use this only for videos you own or have permission to download."}
+                      </em>
+                    </div>
+                  </div>
+
+                  {video ? (
+                    <div className="panel">
+                      <SectionHeader icon={<FileVideo size={20} />} title="Source Details" />
+                      <div className="metric-strip">
+                        <div>
+                          <span>Name</span>
+                          <strong>{video.originalName}</strong>
+                        </div>
+                        <div>
+                          <span>Source</span>
+                          <strong>{formatBytes(video.metadata.fileSize)}</strong>
+                        </div>
+                        <div>
+                          <span>Duration</span>
+                          <strong>{formatDuration(video.metadata.durationSeconds)}</strong>
+                        </div>
+                        <div>
+                          <span>Bitrate</span>
+                          <strong>{formatBitrate(video.metadata.overallBitrate)}</strong>
+                        </div>
+                      </div>
+                      <div className={video.metadata.webFriendly ? "notice good" : "notice warn"}>
+                        {video.metadata.webFriendly ? "Looks web-friendly." : "Compatibility review recommended."}
+                      </div>
+                      <a className="button secondary wide" href={sourceDownloadUrl}>
+                        <Download size={18} />
+                        Download Original Source
+                      </a>
+                      {video.metadata.warnings.map((warning) => (
+                        <div className="notice warn" key={warning}>
+                          {warning}
+                        </div>
+                      ))}
+                      <div className="subtitle-status">
+                        <div>
+                          <Captions size={20} />
+                          <span>
+                            <strong>Subtitles</strong>
+                            <em>
+                              {video.metadata.trackCounts.subtitle > 0
+                                ? `${video.metadata.trackCounts.subtitle} embedded subtitle track${video.metadata.trackCounts.subtitle === 1 ? "" : "s"} found`
+                                : video.metadata.trackCounts.audio === 0
+                                  ? "No audio track found"
+                                  : capabilities?.whisperCpp && capabilities?.whisperModel
+                                    ? "No embedded subtitles. Ready to generate captions locally."
+                                    : "No embedded subtitles. Configure whisper.cpp to generate captions."}
+                            </em>
+                          </span>
+                        </div>
+                        <button
+                          className="button secondary"
+                          onClick={startSubtitleJob}
+                          disabled={
+                            video.metadata.trackCounts.audio === 0 ||
+                            subtitleJob?.status === "running" ||
+                            !capabilities?.whisperCpp ||
+                            !capabilities?.whisperModel
+                          }
+                        >
+                          <Captions size={18} />
+                          {subtitleJob?.status === "running" ? "Generating..." : "Generate Subtitles"}
+                        </button>
+                      </div>
+                      {capabilities &&
+                        (!capabilities.whisperCpp || !capabilities.whisperModel) &&
+                        video.metadata.trackCounts.audio > 0 && (
+                          <div className="notice info">
+                            Subtitle generation needs whisper.cpp and a model. Set WHISPER_CPP_BIN and WHISPER_CPP_MODEL
+                            before starting the API.
+                          </div>
+                        )}
+                      <details className="details-panel">
+                        <summary>Technical details</summary>
+                        <div className="fields">
+                          <Field label="Container" value={video.metadata.container} />
+                          <Field label="Video codec" value={video.metadata.videoCodec} />
+                          <Field label="Audio codec" value={video.metadata.audioCodec} />
+                          <Field
+                            label="Resolution"
+                            value={
+                              video.metadata.width && video.metadata.height
+                                ? `${video.metadata.width} x ${video.metadata.height}`
+                                : undefined
+                            }
+                          />
+                          <Field
+                            label="Frame rate"
+                            value={video.metadata.frameRate ? `${video.metadata.frameRate} fps` : undefined}
+                          />
+                          <Field label="Video bitrate" value={formatBitrate(video.metadata.videoBitrate)} />
+                          <Field label="Audio bitrate" value={formatBitrate(video.metadata.audioBitrate)} />
+                          <Field label="Pixel format" value={video.metadata.pixelFormat} />
+                          <Field
+                            label="Audio sample rate"
+                            value={video.metadata.audioSampleRate ? `${video.metadata.audioSampleRate} Hz` : undefined}
+                          />
+                          <Field
+                            label="Tracks"
+                            value={`${video.metadata.trackCounts.video} video, ${video.metadata.trackCounts.audio} audio, ${video.metadata.trackCounts.subtitle} subtitle`}
+                          />
+                        </div>
+                      </details>
+                    </div>
+                  ) : (
+                    <div className="panel empty-panel">
+                      <SectionHeader icon={<Gauge size={20} />} title="Waiting For A Source" />
+                      <p className="muted">
+                        After upload, this panel will show codecs, bitrate, dimensions, track counts, compatibility
+                        notes, and web-delivery warnings.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </section>
-            </div>
+            )}
 
-            <aside className="panel package-panel">
-              <SectionHeader icon={<CheckCircle2 size={20} />} title="Website Package" kicker="Everything needed to drop the video into a site." />
-              <div className="package-checklist">
-                <div className={packageItemClass(hasFallbackExport)}><CheckCircle2 size={17} /><span>MP4 fallback</span></div>
-                <div className={packageItemClass(hasModernExport)}><CheckCircle2 size={17} /><span>Modern WebM/AV1</span></div>
-                <div className={packageItemClass(hasPoster)}><CheckCircle2 size={17} /><span>Poster image</span></div>
-                <div className={packageItemClass(hasCaptions)}><CheckCircle2 size={17} /><span>Captions VTT/SRT</span></div>
-                <div className={packageItemClass(hasCaptions)}><CheckCircle2 size={17} /><span>Transcript</span></div>
-                <div className={packageItemClass(packageMetadataReady)}><CheckCircle2 size={17} /><span>SEO metadata</span></div>
-                <div className={packageItemClass(packageJob?.status === "completed")}><CheckCircle2 size={17} /><span>Package ZIP</span></div>
-              </div>
-              {posterUrl && (
-                <div className="poster-preview">
-                  <div>
-                    <strong>Poster preview</strong>
-                    <span>{posterJob?.outputFileName ?? "Generated WebP poster"}</span>
-                  </div>
-                  <img src={posterUrl} alt={posterJob?.outputFileName ?? "Generated poster preview"} />
-                </div>
-              )}
-              <div className="package-meta-form">
-                <label>
-                  <span>Video title</span>
-                  <input value={packageMetadata.title} onChange={(event) => setPackageMetadata({ ...packageMetadata, title: event.target.value })} />
-                </label>
-                <label>
-                  <span>SEO description</span>
-                  <textarea value={packageMetadata.description} onChange={(event) => setPackageMetadata({ ...packageMetadata, description: event.target.value })} />
-                </label>
-                <div className="package-meta-row">
-                  <label>
-                    <span>Language</span>
-                    <input value={packageMetadata.language} onChange={(event) => setPackageMetadata({ ...packageMetadata, language: event.target.value })} />
-                  </label>
-                  <label>
-                    <span>Filename prefix</span>
-                    <input value={packageMetadata.filenamePrefix} onChange={(event) => setPackageMetadata({ ...packageMetadata, filenamePrefix: slugify(event.target.value) })} />
-                  </label>
-                </div>
-              </div>
-              <div className="package-files">
-                <strong>{packageJobIds.length} selected output{packageJobIds.length === 1 ? "" : "s"}</strong>
-                <span>Original {formatBytes(video.metadata.fileSize)} / package media {formatBytes(packagePreviewSize)}{packageSavings !== undefined ? ` / ${packageSavings}% smaller` : ""}. Includes selected videos, poster, captions, transcript, embed markup, and notes.</span>
-                {selectedPackageJobs.length > 0 && (
-                  <ul className="package-preview-list">
-                    {selectedPackageJobs.map((selectedJob) => (
-                      <li key={selectedJob.id}>{selectedJob.outputFileName ?? selectedJob.id}</li>
-                    ))}
-                    <li>embed.html</li>
-                    <li>README.txt</li>
-                  </ul>
-                )}
-              </div>
-              <button className="button primary wide" onClick={createWebPackage} disabled={packageJobIds.length === 0 || !packageMetadataReady}>
-                <Package size={18} />
-                Build Download Package
-              </button>
-              {packageJob?.status === "completed" && (
-                <div className="package-actions">
-                  <a className="button secondary wide" href={`${apiBaseUrl}/api/jobs/${packageJob.id}/download`}>
-                    <Download size={18} />
-                    Download ZIP
-                  </a>
-                  <button className="button secondary wide" onClick={() => void revealJobOutput(packageJob)}>
-                    <FolderOpen size={18} />
-                    Show In Folder
-                  </button>
-                </div>
-              )}
-            </aside>
-          </div>
-        </section>
-      )}
-
-      {video && activeView === "custom" && (
-        <section className="workflow-section custom-view" id="export">
-          <SectionHeader icon={<Settings2 size={21} />} title="Custom Export" kicker="Manual presets and FFmpeg-style settings for one-off variations." />
-          <div className="export-layout">
-            <div className="export-main">
-              <div className="panel preset-panel">
-                <SectionHeader icon={<Wand2 size={20} />} title="Choose Intent" kicker="Start from a sensible export goal, then adjust details below." />
-                <div className="preset-cards">
-                  {Object.entries(presetInfo).map(([name, info]) => (
-                    <button className={`preset-card ${activePreset === name ? "active" : ""}`} key={name} onClick={() => applyPreset(name)}>
-                      <span className="preset-icon">{info.icon}</span>
-                      <span>
-                        <strong>{name}</strong>
-                        <em>{info.label}</em>
-                      </span>
-                      <p>{info.description}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="panel target-size-panel">
-                <SectionHeader icon={<Gauge size={20} />} title="Target Size" kicker="Pick a rough web budget and the app will adjust width, frame rate, CRF, and audio." />
-                <div className="target-size-grid">
-                  {[2, 5, 10].map((targetMb) => (
-                    <button className="target-size-button" key={targetMb} onClick={() => applyTargetSize(targetMb)}>
-                      <strong>Under {targetMb} MB</strong>
-                      <span>{targetMb === 2 ? "Tiny embeds" : targetMb === 5 ? "Marketing pages" : "Higher quality"}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="panel settings-panel">
-                <SectionHeader icon={<Settings2 size={20} />} title="Advanced Settings" kicker="Grouped so the common decisions stay easy to scan." />
-
-                <SettingsGroup icon={<Package size={18} />} title="Output">
-                  <label>
-                    <Label help="The downloaded file name. The extension is picked from the selected output format.">Filename</Label>
-                    <input value={settings.outputFilename} onChange={(event) => setSettings({ ...settings, outputFilename: event.target.value })} />
-                  </label>
-                  <label>
-                    <Label help="MP4 is the safest fallback. WebM is great for modern browsers, especially with AV1 or VP9.">File format</Label>
-                    <select value={settings.outputContainer} onChange={(event) => updateOutputContainer(event.target.value as Settings["outputContainer"])}>
-                      <option value="mp4">MP4</option>
-                      <option value="webm">WebM</option>
-                    </select>
-                  </label>
-                </SettingsGroup>
-
-                <SettingsGroup icon={<FileVideo size={18} />} title="Video">
-                  <label>
-                    <Label help="H.264 is the compatibility workhorse. AV1 usually compresses smaller but encodes much slower. VP9 is a solid WebM fallback.">Video codec</Label>
-                    <select value={settings.videoCodec} onChange={(event) => updateVideoCodec(event.target.value as Settings["videoCodec"])}>
-                      <option value="libx264">H.264 / libx264</option>
-                      <option value="libaom-av1">AV1 / libaom-av1</option>
-                      <option value="libvpx-vp9">VP9 / libvpx-vp9</option>
-                    </select>
-                  </label>
-                  <label>
-                    <Label help="Set a target width while preserving aspect ratio. Leave blank to keep the source size.">Width</Label>
-                    <input type="number" min="240" value={settings.width ?? ""} placeholder="Keep source" onChange={(event) => setSettings({ ...settings, width: event.target.value ? Number(event.target.value) : undefined })} />
-                  </label>
-                  <label>
-                    <Label help="Lowering 30 or 60 fps sources to 24 fps can help background and marketing videos shrink. Leave blank to keep source fps.">Frame rate</Label>
-                    <input type="number" min="1" value={settings.frameRate ?? ""} placeholder="Keep source" onChange={(event) => setSettings({ ...settings, frameRate: event.target.value ? Number(event.target.value) : undefined })} />
-                  </label>
-                  <label>
-                    <Label help="Constant quality mode. Lower means larger/better; higher means smaller/more compressed. H.264 often likes 20-26, AV1 often likes 30-38.">CRF: {settings.crf} ({qualityLabel(settings)})</Label>
-                    <input type="range" min="16" max="40" value={settings.crf} onChange={(event) => setSettings({ ...settings, crf: Number(event.target.value) })} />
-                  </label>
-                  <label>
-                    <Label help="For H.264, slower presets spend more CPU to find smaller files at the same CRF.">H.264 preset</Label>
-                    <select value={settings.preset} onChange={(event) => setSettings({ ...settings, preset: event.target.value as Settings["preset"] })}>
-                      <option value="veryfast">Very fast</option>
-                      <option value="fast">Fast</option>
-                      <option value="medium">Medium</option>
-                      <option value="slow">Slow</option>
-                    </select>
-                  </label>
-                </SettingsGroup>
-
-                <SettingsGroup icon={<Volume2 size={18} />} title="Audio">
-                  <label>
-                    <Label help="Remove audio for silent loops, compress it for normal web video, or keep the source audio settings.">Audio mode</Label>
-                    <select value={settings.audioMode} onChange={(event) => setSettings({ ...settings, audioMode: event.target.value as Settings["audioMode"] })}>
-                      <option value="keep">Keep</option>
-                      <option value="compress">Compress</option>
-                      <option value="remove">Remove</option>
-                    </select>
-                  </label>
-                  <label>
-                    <Label help="128-160 kbps is common for AAC web video. 64-96 kbps is often fine for Opus or simple speech/music.">Audio codec</Label>
-                    <select value={settings.audioCodec} disabled={settings.audioMode === "remove"} onChange={(event) => setSettings({ ...settings, audioCodec: event.target.value as Settings["audioCodec"] })}>
-                      <option value="aac">AAC</option>
-                      <option value="libopus">Opus</option>
-                    </select>
-                  </label>
-                  <label>
-                    <Label help="Target audio bitrate in kbps when audio is compressed.">Audio bitrate</Label>
-                    <input type="number" min="32" step="16" value={settings.audioBitrateKbps} disabled={settings.audioMode === "remove"} onChange={(event) => setSettings({ ...settings, audioBitrateKbps: Number(event.target.value) })} />
-                  </label>
-                  <label>
-                    <Label help="48000 Hz is the normal video sample rate and a good default for website exports.">Sample rate</Label>
-                    <input type="number" min="8000" step="1000" value={settings.audioSampleRate ?? ""} disabled={settings.audioMode === "remove"} placeholder="Keep source" onChange={(event) => setSettings({ ...settings, audioSampleRate: event.target.value ? Number(event.target.value) : undefined })} />
-                  </label>
-                  <label>
-                    <Label help="Use 2 channels for stereo web exports. Leave blank to keep the source channel layout.">Channels</Label>
-                    <input type="number" min="1" max="8" value={settings.audioChannels ?? ""} disabled={settings.audioMode === "remove"} placeholder="Keep source" onChange={(event) => setSettings({ ...settings, audioChannels: event.target.value ? Number(event.target.value) : undefined })} />
-                  </label>
-                </SettingsGroup>
-
-                <SettingsGroup icon={<Cpu size={18} />} title="Advanced">
-                  <label>
-                    <Label help="AV1 and VP9 speed setting. Higher is faster but can reduce compression efficiency. Your past AV1 commands used 5.">CPU used</Label>
-                    <input type="number" min="0" max="8" value={settings.cpuUsed} disabled={settings.videoCodec === "libx264"} onChange={(event) => setSettings({ ...settings, cpuUsed: Number(event.target.value) })} />
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" checked={settings.rowMt} disabled={settings.videoCodec !== "libaom-av1"} onChange={(event) => setSettings({ ...settings, rowMt: event.target.checked })} />
-                    <span className="label-row">AV1 row multithreading <Help text="Adds -row-mt 1 for libaom-av1, which can improve AV1 encoding speed on multi-core CPUs." /></span>
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" checked={settings.fastStart} disabled={settings.outputContainer !== "mp4"} onChange={(event) => setSettings({ ...settings, fastStart: event.target.checked })} />
-                    <span className="label-row">MP4 fast-start <Help text="Moves MP4 metadata to the front so browser playback can begin sooner before the whole file downloads." /></span>
-                  </label>
-                  <label className="check">
-                    <input type="checkbox" checked={settings.stripMetadata} onChange={(event) => setSettings({ ...settings, stripMetadata: event.target.checked })} />
-                    <span className="label-row">Strip metadata <Help text="Removes embedded tags and metadata. This can reduce noise and avoid carrying private or irrelevant file metadata." /></span>
-                  </label>
-                </SettingsGroup>
-              </div>
-            </div>
-
-            <aside className="panel summary-panel">
-              <SectionHeader icon={<Gauge size={20} />} title="Custom Estimate" />
-              <div className="summary-hero">
-                <span>{estimate?.reduction === undefined ? "Estimate" : `${estimate.reduction}%`}</span>
-                <strong>{formatBytes(estimate?.bytes)}</strong>
-                <em>{qualityLabel(settings)}</em>
-              </div>
-              <div className="fields single">
-                <Field label="Format" value={`${settings.outputContainer.toUpperCase()} / ${codecLabel(settings.videoCodec)}`} />
-                <Field label="Original" value={formatBytes(video.metadata.fileSize)} />
-                <Field label="Audio" value={settings.audioMode === "remove" ? "Removed" : `${settings.audioCodec === "aac" ? "AAC" : "Opus"} ${settings.audioBitrateKbps} kbps`} />
-              </div>
-              <p className="muted">{estimate?.note}</p>
-              <div className="recommendations">
-                {recommendations.slice(0, 3).map((item) => (
-                  <div className={`recommendation ${item.tone}`} key={item.text}>
-                    <CheckCircle2 size={16} />
-                    <span>{item.text}</span>
-                  </div>
-                ))}
-              </div>
-              <div className="notice info">{nextExportSuggestion(settings)}</div>
-              {capabilities && (!capabilities.libx264 || !capabilities.libaomAv1 || !capabilities.aac || !capabilities.libopus) && (
-                <div className="notice warn">
-                  FFmpeg capability check: {[
-                    !capabilities.libx264 && "H.264 unavailable",
-                    !capabilities.libaomAv1 && "AV1 unavailable",
-                    !capabilities.aac && "AAC unavailable",
-                    !capabilities.libopus && "Opus unavailable"
-                  ].filter(Boolean).join(", ")}
-                </div>
-              )}
-              <div className="summary-actions">
-                <button className="button primary" onClick={startJob} disabled={job?.status === "running"}>
-                  <Play size={18} />
-                  {job?.status === "running" ? "Processing..." : "Export Current Settings"}
-                </button>
-                <button className="button secondary" onClick={startSampleJob} disabled={sampleJob?.status === "running"}>
-                  <Gauge size={18} />
-                  Test 5-Second Sample
-                </button>
-                <button className="button secondary" onClick={startPairJobs}>
-                  <Package size={18} />
-                  Create Default Website Pair
-                </button>
-              </div>
-              <p className="muted">Use Export Current Settings for the exact controls above. Default Website Pair creates the standard MP4 fallback and AV1/WebM recipe.</p>
-              {error && <div className="notice error">{error}</div>}
-            </aside>
-          </div>
-        </section>
-      )}
-
-      {video && activeView === "compare" && (
-        <section className="workflow-section" id="compare">
-          <SectionHeader icon={<Layers size={21} />} title="Compare & Download" kicker={job?.status === "completed" && job.kind === "encode" ? `Reviewing ${job.outputFileName ?? variationLabel(job)}.` : "Your completed export will appear here after processing."} />
-          {job?.status === "completed" && job.kind === "encode" ? (
-            <div className="compare-theater">
-              <div className="theater-toolbar">
-                <div>
-                  <strong>{job.outputFileName ?? "Optimized video"}</strong>
-                  <span>{completedReduction === undefined ? "Optimized output" : `${completedReduction}% smaller than source`}</span>
-                </div>
-                <label className="sync-toggle">
-                  <input type="checkbox" checked={syncPlayback} onChange={(event) => setSyncPlayback(event.target.checked)} />
-                  Sync playback
-                </label>
-              </div>
-
-              <div className="theater-canvas">
-                <div className="theater-pane">
-                  <span className="theater-label">Original</span>
-                  <video
-                    controls
-                    ref={originalCompareRef}
-                    src={sourceUrl}
-                    onPlay={() => syncVideoState("original", "play")}
-                    onPause={() => syncVideoState("original", "pause")}
-                    onSeeked={() => syncVideoState("original", "seek")}
-                    onRateChange={() => syncVideoState("original", "rate")}
-                  />
-                </div>
-                <div className="theater-divider" />
-                <div className="theater-pane">
-                  <span className="theater-label optimized">Optimized</span>
-                  <video
-                    controls
-                    ref={optimizedCompareRef}
-                    src={outputUrl}
-                    onPlay={() => syncVideoState("optimized", "play")}
-                    onPause={() => syncVideoState("optimized", "pause")}
-                    onSeeked={() => syncVideoState("optimized", "seek")}
-                    onRateChange={() => syncVideoState("optimized", "rate")}
-                  />
-                </div>
-              </div>
-
-              <div className="theater-footer">
-                <div className="theater-stats">
-                  <Field label="Original" value={formatBytes(video.metadata.fileSize)} />
-                  <Field label="Optimized" value={formatBytes(job.outputSize)} />
-                  <Field label="Format" value={`${job.settings.outputContainer.toUpperCase()} / ${codecLabel(job.settings.videoCodec)}`} />
-                  <Field label="Savings" value={fileSizeDelta(job.outputSize, video.metadata.fileSize)} />
-                </div>
-                <div className="actions">
-                  <a className="button primary" href={downloadUrl}>
-                    <Download size={18} />
-                    Download Video
-                  </a>
-                  {posterUrl && (
-                    <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${posterJob?.id}/download`}>
-                      <Download size={18} />
-                      Poster
-                    </a>
-                  )}
-                  <button className="button secondary" onClick={() => navigator.clipboard.writeText(job.ffmpegCommand)}>
-                    <Copy size={18} />
-                    FFmpeg
-                  </button>
-                  <button className="button secondary" onClick={() => navigator.clipboard.writeText(videoMarkup)}>
-                    <Copy size={18} />
-                    HTML
-                  </button>
-                </div>
-              </div>
-
-              <details className="details-panel compare-details">
-                <summary>Command and website markup</summary>
-                <h3>FFmpeg Command</h3>
-                <pre>{job.ffmpegCommand}</pre>
-                <h3>Website Markup</h3>
-                <pre>{videoMarkup}</pre>
-                <div className="notice info">{nextExportSuggestion(job.settings)}</div>
-              </details>
-            </div>
-          ) : (
-            <div className="panel empty-panel">
-              <SectionHeader icon={<BadgeCheck size={20} />} title="No Export Yet" />
-              <p className="muted">Choose a preset, review the export summary, and process the video. The comparison view will open up here.</p>
-            </div>
-          )}
-        </section>
-      )}
-
-      {video && activeView === "captions" && (
-        <section className="workflow-section" id="captions">
-          <SectionHeader icon={<Captions size={21} />} title="Subtitle Theatre" kicker="Preview captions like a browser text track, then clean up the WebVTT source." />
-          {editingSubtitleJob ? (
-            <div className="caption-theater">
-              <div className="subtitle-editor-header">
-                <div>
-                  <strong>{editingSubtitleJob.outputFileName ?? "Generated captions"}</strong>
-                  <span>Save updates the VTT file and regenerates the SRT sidecar.</span>
-                </div>
-                <div className="actions">
-                  <button className="button secondary" onClick={() => setActiveView("outputs")}>
-                    <Package size={17} />
-                    Back To Outputs
-                  </button>
-                  <button className="button primary" onClick={() => void saveSubtitleEdits()} disabled={isSavingSubtitles}>
-                    <Save size={17} />
-                    {isSavingSubtitles ? "Saving..." : "Save Captions"}
-                  </button>
-                  <button className="button secondary" onClick={() => setSubtitleDraft((current) => cleanSubtitleDraft(current))}>
-                    <Sparkles size={17} />
-                    Clean Transcript
-                  </button>
-                  <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${editingSubtitleJob.id}/download`}>
-                    <Download size={17} />
-                    VTT
-                  </a>
-                  {editingSubtitleJob.sidecarFileName && (
-                    <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${editingSubtitleJob.id}/sidecar`}>
-                      <Download size={17} />
-                      SRT
-                    </a>
-                  )}
-                </div>
-              </div>
-              <div className="subtitle-stage">
-                <video
-                  key={`${editingSubtitleJob.id}-${subtitlePreviewKey}`}
-                  controls
-                  crossOrigin="anonymous"
-                  preload="metadata"
-                  src={sourceUrl}
-                  onLoadedMetadata={(event) => {
-                    const [track] = Array.from(event.currentTarget.textTracks);
-                    if (track) track.mode = "showing";
-                  }}
-                >
-                  <track src={`${apiBaseUrl}/api/jobs/${editingSubtitleJob.id}/output?preview=${subtitlePreviewKey}`} kind="subtitles" srcLang="en" label="English" default />
-                </video>
-                <div className="subtitle-stage-label">
-                  <Captions size={17} />
-                  Browser subtitle preview
-                </div>
-              </div>
-              <div className="subtitle-editor-drawer">
-                <div className="subtitle-editor-copy">
-                  <label className="label-row" htmlFor="subtitle-draft">
-                    WebVTT captions
-                    <Help text="Keep the WEBVTT header and cue timings. Save updates the VTT and regenerates SRT automatically." />
-                  </label>
-                  <p className="muted">Preview uses the last saved file. After editing, save captions and replay this theatre preview to check timing and wording.</p>
-                </div>
-                <textarea
-                  id="subtitle-draft"
-                  value={subtitleDraft}
-                  spellCheck
-                  onChange={(event) => setSubtitleDraft(event.target.value)}
+            {video && activeView === "outputs" && (
+              <section className="workflow-section" id="variations">
+                <SectionHeader
+                  icon={<Package size={21} />}
+                  title="Jobs & Outputs"
+                  kicker="Watch active work, review finished files, and build a website-ready package."
                 />
-              </div>
-            </div>
-          ) : (
-            <div className="panel empty-panel">
-              <SectionHeader icon={<Captions size={20} />} title="No Captions Selected" />
-              <p className="muted">Open a completed caption output from Jobs & Outputs to review and edit it here.</p>
-              <button className="button secondary" onClick={() => setActiveView("outputs")}>Back To Outputs</button>
-            </div>
-          )}
-        </section>
-      )}
+                <div className="outputs-layout">
+                  <div className="outputs-main">
+                    <section className="panel job-queue">
+                      <SectionHeader icon={<Gauge size={20} />} title="Current Jobs" />
+                      {runningJobs.length === 0 ? (
+                        <p className="muted">
+                          No jobs running. Start the recommended website package or create a custom export.
+                        </p>
+                      ) : (
+                        <div className="job-list">
+                          {runningJobs.map((runningJob) => (
+                            <div className="job-row" key={runningJob.id}>
+                              <div>
+                                <strong>{jobTitle(runningJob)}</strong>
+                                <span>{runningJob.message ?? runningJob.status}</span>
+                              </div>
+                              <progress value={runningJob.progress} max="100" />
+                              <button className="button secondary" onClick={() => void cancelJob(runningJob)}>
+                                Cancel
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
 
-      </>
-      )}
+                    <section className="output-cards">
+                      {finishedOutputJobs.length === 0 ? (
+                        <div className="panel empty-panel">
+                          <SectionHeader icon={<Package size={20} />} title="No Outputs Yet" />
+                          <p className="muted">
+                            Use Optimize For Website to create an MP4 fallback, modern video, and poster, or go to
+                            Custom for manual settings.
+                          </p>
+                          <div className="actions">
+                            <button className="button primary" onClick={optimizeForWebsite}>
+                              <Wand2 size={18} />
+                              Optimize For Website
+                            </button>
+                            <button className="button secondary" onClick={() => setActiveView("custom")}>
+                              <Settings2 size={18} />
+                              Custom Export
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        finishedOutputJobs.map((output) => {
+                          const canInclude =
+                            output.status === "completed" &&
+                            (output.kind === "encode" ||
+                              output.kind === "mux" ||
+                              output.kind === "poster" ||
+                              output.kind === "subtitle");
+                          const packageChecked =
+                            canInclude &&
+                            packageCandidateJobs.length > 0 &&
+                            (selectedPackageJobIds.length === 0 ? true : selectedPackageJobIds.includes(output.id));
+                          const failed = output.status === "failed" || output.status === "canceled";
+                          return (
+                            <article
+                              className={`output-card ${failed ? "failed" : ""} ${output.id === job?.id || output.id === posterJob?.id || output.id === packageJob?.id || output.id === subtitleJob?.id || output.id === muxJob?.id ? "active" : ""}`}
+                              key={output.id}
+                            >
+                              <div className="output-card-main">
+                                <span className="output-kind">{jobTitle(output)}</span>
+                                {output.outputFileName ? (
+                                  <div className="name-editor output-name-editor">
+                                    <input
+                                      value={jobNameDrafts[output.id] ?? output.outputFileName}
+                                      onChange={(event) =>
+                                        setJobNameDrafts((current) => ({ ...current, [output.id]: event.target.value }))
+                                      }
+                                      onKeyDown={(event) => {
+                                        if (event.key === "Enter") void renameJobOutput(output);
+                                      }}
+                                      aria-label={`Filename for ${output.outputFileName}`}
+                                    />
+                                    <button
+                                      className="icon-button"
+                                      type="button"
+                                      onClick={() => void renameJobOutput(output)}
+                                      disabled={
+                                        renamingJobId === output.id ||
+                                        (jobNameDrafts[output.id] ?? output.outputFileName).trim() ===
+                                          output.outputFileName
+                                      }
+                                      aria-label="Save output filename"
+                                    >
+                                      <Save size={15} />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <h3>{output.id}</h3>
+                                )}
+                                <p>{failed ? (output.message ?? output.status) : variationDetails(output)}</p>
+                                {output.status === "completed" && output.kind === "poster" && (
+                                  <button
+                                    className="poster-thumb"
+                                    type="button"
+                                    onClick={() => openPosterLightbox(output)}
+                                  >
+                                    <img
+                                      src={`${apiBaseUrl}/api/jobs/${output.id}/output`}
+                                      alt={`${output.outputFileName ?? "Generated poster"} preview`}
+                                    />
+                                    <span>Preview poster</span>
+                                  </button>
+                                )}
+                                <div className="badge-row">
+                                  {failed ? (
+                                    <b>{output.status}</b>
+                                  ) : (
+                                    variationBadges(output).map((badge) => <b key={badge}>{badge}</b>)
+                                  )}
+                                </div>
+                              </div>
+                              <div className="output-card-stats">
+                                <Field label="Status" value={output.status} />
+                                <Field label="Size" value={formatBytes(output.outputSize)} />
+                              </div>
+                              <div className="output-card-actions">
+                                {canInclude && (
+                                  <label className="package-check">
+                                    <input
+                                      type="checkbox"
+                                      checked={packageChecked}
+                                      onChange={() => togglePackageJob(output.id)}
+                                    />
+                                    Use in package
+                                  </label>
+                                )}
+                                {output.status === "completed" &&
+                                  (output.kind === "encode" || output.kind === "mux") && (
+                                    <button className="button secondary" onClick={() => selectVariation(output)}>
+                                      <Layers size={17} />
+                                      Compare
+                                    </button>
+                                  )}
+                                {output.status === "completed" &&
+                                  (output.kind === "encode" || output.kind === "mux") &&
+                                  hasCaptions && (
+                                    <button
+                                      className="button secondary"
+                                      onClick={() => void muxSubtitlesIntoVideo(output)}
+                                    >
+                                      <Captions size={17} />
+                                      Embed Captions
+                                    </button>
+                                  )}
+                                {output.status === "completed" && (
+                                  <>
+                                    {output.kind === "poster" && (
+                                      <button className="button secondary" onClick={() => openPosterLightbox(output)}>
+                                        <Image size={17} />
+                                        Preview
+                                      </button>
+                                    )}
+                                    {output.kind === "subtitle" && (
+                                      <button
+                                        className="button secondary"
+                                        onClick={() => void openSubtitleEditor(output)}
+                                      >
+                                        <Edit3 size={17} />
+                                        Edit
+                                      </button>
+                                    )}
+                                    <a
+                                      className="button secondary"
+                                      href={`${apiBaseUrl}/api/jobs/${output.id}/download`}
+                                    >
+                                      <Download size={17} />
+                                      {output.kind === "subtitle" ? "VTT" : "Download"}
+                                    </a>
+                                    {output.kind === "subtitle" && output.sidecarFileName && (
+                                      <a
+                                        className="button secondary"
+                                        href={`${apiBaseUrl}/api/jobs/${output.id}/sidecar`}
+                                      >
+                                        <Download size={17} />
+                                        SRT
+                                      </a>
+                                    )}
+                                    <button className="button secondary" onClick={() => void revealJobOutput(output)}>
+                                      <FolderOpen size={17} />
+                                      Folder
+                                    </button>
+                                  </>
+                                )}
+                                {failed && output.ffmpegCommand && (
+                                  <button
+                                    className="button secondary"
+                                    onClick={() => navigator.clipboard.writeText(output.ffmpegCommand)}
+                                  >
+                                    <Copy size={17} />
+                                    Copy Command
+                                  </button>
+                                )}
+                                <button
+                                  className="icon-button danger-button"
+                                  onClick={() => void deleteHistoryItems([], [output.id])}
+                                  aria-label="Delete output"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                            </article>
+                          );
+                        })
+                      )}
+                    </section>
+                  </div>
+
+                  <aside className="panel package-panel">
+                    <SectionHeader
+                      icon={<CheckCircle2 size={20} />}
+                      title="Website Package"
+                      kicker="Everything needed to drop the video into a site."
+                    />
+                    <div className="package-checklist">
+                      <div className={packageItemClass(hasFallbackExport)}>
+                        <CheckCircle2 size={17} />
+                        <span>MP4 fallback</span>
+                      </div>
+                      <div className={packageItemClass(hasModernExport)}>
+                        <CheckCircle2 size={17} />
+                        <span>Modern WebM/AV1</span>
+                      </div>
+                      <div className={packageItemClass(hasPoster)}>
+                        <CheckCircle2 size={17} />
+                        <span>Poster image</span>
+                      </div>
+                      <div className={packageItemClass(hasCaptions)}>
+                        <CheckCircle2 size={17} />
+                        <span>Captions VTT/SRT</span>
+                      </div>
+                      <div className={packageItemClass(hasCaptions)}>
+                        <CheckCircle2 size={17} />
+                        <span>Transcript</span>
+                      </div>
+                      <div className={packageItemClass(packageMetadataReady)}>
+                        <CheckCircle2 size={17} />
+                        <span>SEO metadata</span>
+                      </div>
+                      <div className={packageItemClass(packageJob?.status === "completed")}>
+                        <CheckCircle2 size={17} />
+                        <span>Package ZIP</span>
+                      </div>
+                    </div>
+                    {posterUrl && (
+                      <div className="poster-preview">
+                        <div>
+                          <strong>Poster preview</strong>
+                          <span>{posterJob?.outputFileName ?? "Generated WebP poster"}</span>
+                        </div>
+                        <img src={posterUrl} alt={posterJob?.outputFileName ?? "Generated poster preview"} />
+                      </div>
+                    )}
+                    <div className="package-meta-form">
+                      <label>
+                        <span>Video title</span>
+                        <input
+                          value={packageMetadata.title}
+                          onChange={(event) => setPackageMetadata({ ...packageMetadata, title: event.target.value })}
+                        />
+                      </label>
+                      <label>
+                        <span>SEO description</span>
+                        <textarea
+                          value={packageMetadata.description}
+                          onChange={(event) =>
+                            setPackageMetadata({ ...packageMetadata, description: event.target.value })
+                          }
+                        />
+                      </label>
+                      <div className="package-meta-row">
+                        <label>
+                          <span>Language</span>
+                          <input
+                            value={packageMetadata.language}
+                            onChange={(event) =>
+                              setPackageMetadata({ ...packageMetadata, language: event.target.value })
+                            }
+                          />
+                        </label>
+                        <label>
+                          <span>Filename prefix</span>
+                          <input
+                            value={packageMetadata.filenamePrefix}
+                            onChange={(event) =>
+                              setPackageMetadata({ ...packageMetadata, filenamePrefix: slugify(event.target.value) })
+                            }
+                          />
+                        </label>
+                      </div>
+                    </div>
+                    <div className="package-files">
+                      <strong>
+                        {packageJobIds.length} selected output{packageJobIds.length === 1 ? "" : "s"}
+                      </strong>
+                      <span>
+                        Original {formatBytes(video.metadata.fileSize)} / package media{" "}
+                        {formatBytes(packagePreviewSize)}
+                        {packageSavings !== undefined ? ` / ${packageSavings}% smaller` : ""}. Includes selected videos,
+                        poster, captions, transcript, embed markup, and notes.
+                      </span>
+                      {selectedPackageJobs.length > 0 && (
+                        <ul className="package-preview-list">
+                          {selectedPackageJobs.map((selectedJob) => (
+                            <li key={selectedJob.id}>{selectedJob.outputFileName ?? selectedJob.id}</li>
+                          ))}
+                          <li>embed.html</li>
+                          <li>README.txt</li>
+                        </ul>
+                      )}
+                    </div>
+                    <button
+                      className="button primary wide"
+                      onClick={createWebPackage}
+                      disabled={packageJobIds.length === 0 || !packageMetadataReady}
+                    >
+                      <Package size={18} />
+                      Build Download Package
+                    </button>
+                    {packageJob?.status === "completed" && (
+                      <div className="package-actions">
+                        <a className="button secondary wide" href={`${apiBaseUrl}/api/jobs/${packageJob.id}/download`}>
+                          <Download size={18} />
+                          Download ZIP
+                        </a>
+                        <button className="button secondary wide" onClick={() => void revealJobOutput(packageJob)}>
+                          <FolderOpen size={18} />
+                          Show In Folder
+                        </button>
+                      </div>
+                    )}
+                  </aside>
+                </div>
+              </section>
+            )}
+
+            {video && activeView === "custom" && (
+              <section className="workflow-section custom-view" id="export">
+                <SectionHeader
+                  icon={<Settings2 size={21} />}
+                  title="Custom Export"
+                  kicker="Manual presets and FFmpeg-style settings for one-off variations."
+                />
+                <div className="export-layout">
+                  <div className="export-main">
+                    <div className="panel preset-panel">
+                      <SectionHeader
+                        icon={<Wand2 size={20} />}
+                        title="Choose Intent"
+                        kicker="Start from a sensible export goal, then adjust details below."
+                      />
+                      <div className="preset-cards">
+                        {Object.entries(presetInfo).map(([name, info]) => (
+                          <button
+                            className={`preset-card ${activePreset === name ? "active" : ""}`}
+                            key={name}
+                            onClick={() => applyPreset(name)}
+                          >
+                            <span className="preset-icon">{info.icon}</span>
+                            <span>
+                              <strong>{name}</strong>
+                              <em>{info.label}</em>
+                            </span>
+                            <p>{info.description}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="panel target-size-panel">
+                      <SectionHeader
+                        icon={<Gauge size={20} />}
+                        title="Target Size"
+                        kicker="Pick a rough web budget and the app will adjust width, frame rate, CRF, and audio."
+                      />
+                      <div className="target-size-grid">
+                        {[2, 5, 10].map((targetMb) => (
+                          <button
+                            className="target-size-button"
+                            key={targetMb}
+                            onClick={() => applyTargetSize(targetMb)}
+                          >
+                            <strong>Under {targetMb} MB</strong>
+                            <span>
+                              {targetMb === 2 ? "Tiny embeds" : targetMb === 5 ? "Marketing pages" : "Higher quality"}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="panel settings-panel">
+                      <SectionHeader
+                        icon={<Settings2 size={20} />}
+                        title="Advanced Settings"
+                        kicker="Grouped so the common decisions stay easy to scan."
+                      />
+
+                      <SettingsGroup icon={<Package size={18} />} title="Output">
+                        <label>
+                          <Label help="The downloaded file name. The extension is picked from the selected output format.">
+                            Filename
+                          </Label>
+                          <input
+                            value={settings.outputFilename}
+                            onChange={(event) => setSettings({ ...settings, outputFilename: event.target.value })}
+                          />
+                        </label>
+                        <label>
+                          <Label help="MP4 is the safest fallback. WebM is great for modern browsers, especially with AV1 or VP9.">
+                            File format
+                          </Label>
+                          <select
+                            value={settings.outputContainer}
+                            onChange={(event) =>
+                              updateOutputContainer(event.target.value as Settings["outputContainer"])
+                            }
+                          >
+                            <option value="mp4">MP4</option>
+                            <option value="webm">WebM</option>
+                          </select>
+                        </label>
+                      </SettingsGroup>
+
+                      <SettingsGroup icon={<FileVideo size={18} />} title="Video">
+                        <label>
+                          <Label help="H.264 is the compatibility workhorse. AV1 usually compresses smaller but encodes much slower. VP9 is a solid WebM fallback.">
+                            Video codec
+                          </Label>
+                          <select
+                            value={settings.videoCodec}
+                            onChange={(event) => updateVideoCodec(event.target.value as Settings["videoCodec"])}
+                          >
+                            <option value="libx264">H.264 / libx264</option>
+                            <option value="libaom-av1">AV1 / libaom-av1</option>
+                            <option value="libvpx-vp9">VP9 / libvpx-vp9</option>
+                          </select>
+                        </label>
+                        <label>
+                          <Label help="Set a target width while preserving aspect ratio. Leave blank to keep the source size.">
+                            Width
+                          </Label>
+                          <input
+                            type="number"
+                            min="240"
+                            value={settings.width ?? ""}
+                            placeholder="Keep source"
+                            onChange={(event) =>
+                              setSettings({
+                                ...settings,
+                                width: event.target.value ? Number(event.target.value) : undefined
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          <Label help="Lowering 30 or 60 fps sources to 24 fps can help background and marketing videos shrink. Leave blank to keep source fps.">
+                            Frame rate
+                          </Label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={settings.frameRate ?? ""}
+                            placeholder="Keep source"
+                            onChange={(event) =>
+                              setSettings({
+                                ...settings,
+                                frameRate: event.target.value ? Number(event.target.value) : undefined
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          <Label help="Constant quality mode. Lower means larger/better; higher means smaller/more compressed. H.264 often likes 20-26, AV1 often likes 30-38.">
+                            CRF: {settings.crf} ({qualityLabel(settings)})
+                          </Label>
+                          <input
+                            type="range"
+                            min="16"
+                            max="40"
+                            value={settings.crf}
+                            onChange={(event) => setSettings({ ...settings, crf: Number(event.target.value) })}
+                          />
+                        </label>
+                        <label>
+                          <Label help="For H.264, slower presets spend more CPU to find smaller files at the same CRF.">
+                            H.264 preset
+                          </Label>
+                          <select
+                            value={settings.preset}
+                            onChange={(event) =>
+                              setSettings({ ...settings, preset: event.target.value as Settings["preset"] })
+                            }
+                          >
+                            <option value="veryfast">Very fast</option>
+                            <option value="fast">Fast</option>
+                            <option value="medium">Medium</option>
+                            <option value="slow">Slow</option>
+                          </select>
+                        </label>
+                      </SettingsGroup>
+
+                      <SettingsGroup icon={<Volume2 size={18} />} title="Audio">
+                        <label>
+                          <Label help="Remove audio for silent loops, compress it for normal web video, or keep the source audio settings.">
+                            Audio mode
+                          </Label>
+                          <select
+                            value={settings.audioMode}
+                            onChange={(event) =>
+                              setSettings({ ...settings, audioMode: event.target.value as Settings["audioMode"] })
+                            }
+                          >
+                            <option value="keep">Keep</option>
+                            <option value="compress">Compress</option>
+                            <option value="remove">Remove</option>
+                          </select>
+                        </label>
+                        <label>
+                          <Label help="128-160 kbps is common for AAC web video. 64-96 kbps is often fine for Opus or simple speech/music.">
+                            Audio codec
+                          </Label>
+                          <select
+                            value={settings.audioCodec}
+                            disabled={settings.audioMode === "remove"}
+                            onChange={(event) =>
+                              setSettings({ ...settings, audioCodec: event.target.value as Settings["audioCodec"] })
+                            }
+                          >
+                            <option value="aac">AAC</option>
+                            <option value="libopus">Opus</option>
+                          </select>
+                        </label>
+                        <label>
+                          <Label help="Target audio bitrate in kbps when audio is compressed.">Audio bitrate</Label>
+                          <input
+                            type="number"
+                            min="32"
+                            step="16"
+                            value={settings.audioBitrateKbps}
+                            disabled={settings.audioMode === "remove"}
+                            onChange={(event) =>
+                              setSettings({ ...settings, audioBitrateKbps: Number(event.target.value) })
+                            }
+                          />
+                        </label>
+                        <label>
+                          <Label help="48000 Hz is the normal video sample rate and a good default for website exports.">
+                            Sample rate
+                          </Label>
+                          <input
+                            type="number"
+                            min="8000"
+                            step="1000"
+                            value={settings.audioSampleRate ?? ""}
+                            disabled={settings.audioMode === "remove"}
+                            placeholder="Keep source"
+                            onChange={(event) =>
+                              setSettings({
+                                ...settings,
+                                audioSampleRate: event.target.value ? Number(event.target.value) : undefined
+                              })
+                            }
+                          />
+                        </label>
+                        <label>
+                          <Label help="Use 2 channels for stereo web exports. Leave blank to keep the source channel layout.">
+                            Channels
+                          </Label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="8"
+                            value={settings.audioChannels ?? ""}
+                            disabled={settings.audioMode === "remove"}
+                            placeholder="Keep source"
+                            onChange={(event) =>
+                              setSettings({
+                                ...settings,
+                                audioChannels: event.target.value ? Number(event.target.value) : undefined
+                              })
+                            }
+                          />
+                        </label>
+                      </SettingsGroup>
+
+                      <SettingsGroup icon={<Cpu size={18} />} title="Advanced">
+                        <label>
+                          <Label help="AV1 and VP9 speed setting. Higher is faster but can reduce compression efficiency. Your past AV1 commands used 5.">
+                            CPU used
+                          </Label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="8"
+                            value={settings.cpuUsed}
+                            disabled={settings.videoCodec === "libx264"}
+                            onChange={(event) => setSettings({ ...settings, cpuUsed: Number(event.target.value) })}
+                          />
+                        </label>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={settings.rowMt}
+                            disabled={settings.videoCodec !== "libaom-av1"}
+                            onChange={(event) => setSettings({ ...settings, rowMt: event.target.checked })}
+                          />
+                          <span className="label-row">
+                            AV1 row multithreading{" "}
+                            <Help text="Adds -row-mt 1 for libaom-av1, which can improve AV1 encoding speed on multi-core CPUs." />
+                          </span>
+                        </label>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={settings.fastStart}
+                            disabled={settings.outputContainer !== "mp4"}
+                            onChange={(event) => setSettings({ ...settings, fastStart: event.target.checked })}
+                          />
+                          <span className="label-row">
+                            MP4 fast-start{" "}
+                            <Help text="Moves MP4 metadata to the front so browser playback can begin sooner before the whole file downloads." />
+                          </span>
+                        </label>
+                        <label className="check">
+                          <input
+                            type="checkbox"
+                            checked={settings.stripMetadata}
+                            onChange={(event) => setSettings({ ...settings, stripMetadata: event.target.checked })}
+                          />
+                          <span className="label-row">
+                            Strip metadata{" "}
+                            <Help text="Removes embedded tags and metadata. This can reduce noise and avoid carrying private or irrelevant file metadata." />
+                          </span>
+                        </label>
+                      </SettingsGroup>
+                    </div>
+                  </div>
+
+                  <aside className="panel summary-panel">
+                    <SectionHeader icon={<Gauge size={20} />} title="Custom Estimate" />
+                    <div className="summary-hero">
+                      <span>{estimate?.reduction === undefined ? "Estimate" : `${estimate.reduction}%`}</span>
+                      <strong>{formatBytes(estimate?.bytes)}</strong>
+                      <em>{qualityLabel(settings)}</em>
+                    </div>
+                    <div className="fields single">
+                      <Field
+                        label="Format"
+                        value={`${settings.outputContainer.toUpperCase()} / ${codecLabel(settings.videoCodec)}`}
+                      />
+                      <Field label="Original" value={formatBytes(video.metadata.fileSize)} />
+                      <Field
+                        label="Audio"
+                        value={
+                          settings.audioMode === "remove"
+                            ? "Removed"
+                            : `${settings.audioCodec === "aac" ? "AAC" : "Opus"} ${settings.audioBitrateKbps} kbps`
+                        }
+                      />
+                    </div>
+                    <p className="muted">{estimate?.note}</p>
+                    <div className="recommendations">
+                      {recommendations.slice(0, 3).map((item) => (
+                        <div className={`recommendation ${item.tone}`} key={item.text}>
+                          <CheckCircle2 size={16} />
+                          <span>{item.text}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="notice info">{nextExportSuggestion(settings)}</div>
+                    {capabilities &&
+                      (!capabilities.libx264 ||
+                        !capabilities.libaomAv1 ||
+                        !capabilities.aac ||
+                        !capabilities.libopus) && (
+                        <div className="notice warn">
+                          FFmpeg capability check:{" "}
+                          {[
+                            !capabilities.libx264 && "H.264 unavailable",
+                            !capabilities.libaomAv1 && "AV1 unavailable",
+                            !capabilities.aac && "AAC unavailable",
+                            !capabilities.libopus && "Opus unavailable"
+                          ]
+                            .filter(Boolean)
+                            .join(", ")}
+                        </div>
+                      )}
+                    <div className="summary-actions">
+                      <button className="button primary" onClick={startJob} disabled={job?.status === "running"}>
+                        <Play size={18} />
+                        {job?.status === "running" ? "Processing..." : "Export Current Settings"}
+                      </button>
+                      <button
+                        className="button secondary"
+                        onClick={startSampleJob}
+                        disabled={sampleJob?.status === "running"}
+                      >
+                        <Gauge size={18} />
+                        Test 5-Second Sample
+                      </button>
+                      <button className="button secondary" onClick={startPairJobs}>
+                        <Package size={18} />
+                        Create Default Website Pair
+                      </button>
+                    </div>
+                    <p className="muted">
+                      Use Export Current Settings for the exact controls above. Default Website Pair creates the
+                      standard MP4 fallback and AV1/WebM recipe.
+                    </p>
+                    {error && <div className="notice error">{error}</div>}
+                  </aside>
+                </div>
+              </section>
+            )}
+
+            {video && activeView === "compare" && (
+              <section className="workflow-section" id="compare">
+                <SectionHeader
+                  icon={<Layers size={21} />}
+                  title="Compare & Download"
+                  kicker={
+                    job?.status === "completed" && job.kind === "encode"
+                      ? `Reviewing ${job.outputFileName ?? variationLabel(job)}.`
+                      : "Your completed export will appear here after processing."
+                  }
+                />
+                {job?.status === "completed" && job.kind === "encode" ? (
+                  <div className="compare-theater">
+                    <div className="theater-toolbar">
+                      <div>
+                        <strong>{job.outputFileName ?? "Optimized video"}</strong>
+                        <span>
+                          {completedReduction === undefined
+                            ? "Optimized output"
+                            : `${completedReduction}% smaller than source`}
+                        </span>
+                      </div>
+                      <label className="sync-toggle">
+                        <input
+                          type="checkbox"
+                          checked={syncPlayback}
+                          onChange={(event) => setSyncPlayback(event.target.checked)}
+                        />
+                        Sync playback
+                      </label>
+                    </div>
+
+                    <div className="theater-canvas">
+                      <div className="theater-pane">
+                        <span className="theater-label">Original</span>
+                        <video
+                          controls
+                          ref={originalCompareRef}
+                          src={sourceUrl}
+                          onLoadedData={() => setCompareMediaErrors((current) => ({ ...current, original: undefined }))}
+                          onError={(event) =>
+                            setCompareMediaErrors((current) => ({
+                              ...current,
+                              original: describeMediaError(event.currentTarget)
+                            }))
+                          }
+                          onPlay={() => syncVideoState("original", "play")}
+                          onPause={() => syncVideoState("original", "pause")}
+                          onSeeked={() => syncVideoState("original", "seek")}
+                          onRateChange={() => syncVideoState("original", "rate")}
+                        />
+                      </div>
+                      <div className="theater-divider" />
+                      <div className="theater-pane">
+                        <span className="theater-label optimized">Optimized</span>
+                        <video
+                          controls
+                          ref={optimizedCompareRef}
+                          src={outputUrl}
+                          onLoadedData={() =>
+                            setCompareMediaErrors((current) => ({ ...current, optimized: undefined }))
+                          }
+                          onError={(event) =>
+                            setCompareMediaErrors((current) => ({
+                              ...current,
+                              optimized: describeMediaError(event.currentTarget)
+                            }))
+                          }
+                          onPlay={() => syncVideoState("optimized", "play")}
+                          onPause={() => syncVideoState("optimized", "pause")}
+                          onSeeked={() => syncVideoState("optimized", "seek")}
+                          onRateChange={() => syncVideoState("optimized", "rate")}
+                        />
+                      </div>
+                    </div>
+
+                    {(compareMediaErrors.original || compareMediaErrors.optimized) && (
+                      <div className="notice warn compare-media-error">
+                        <strong>Preview issue</strong>
+                        {compareMediaErrors.original && <span>Original: {compareMediaErrors.original}</span>}
+                        {compareMediaErrors.optimized && <span>Optimized: {compareMediaErrors.optimized}</span>}
+                        {compareMediaErrors.optimized && (
+                          <a className="button secondary" href={downloadUrl}>
+                            <Download size={17} />
+                            Download Instead
+                          </a>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="theater-footer">
+                      <div className="theater-stats">
+                        <Field label="Original" value={formatBytes(video.metadata.fileSize)} />
+                        <Field label="Optimized" value={formatBytes(job.outputSize)} />
+                        <Field
+                          label="Format"
+                          value={`${job.settings.outputContainer.toUpperCase()} / ${codecLabel(job.settings.videoCodec)}`}
+                        />
+                        <Field label="Savings" value={fileSizeDelta(job.outputSize, video.metadata.fileSize)} />
+                      </div>
+                      <div className="actions">
+                        <a className="button primary" href={downloadUrl}>
+                          <Download size={18} />
+                          Download Video
+                        </a>
+                        {posterUrl && (
+                          <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${posterJob?.id}/download`}>
+                            <Download size={18} />
+                            Poster
+                          </a>
+                        )}
+                        <button
+                          className="button secondary"
+                          onClick={() => navigator.clipboard.writeText(job.ffmpegCommand)}
+                        >
+                          <Copy size={18} />
+                          FFmpeg
+                        </button>
+                        <button className="button secondary" onClick={() => navigator.clipboard.writeText(videoMarkup)}>
+                          <Copy size={18} />
+                          HTML
+                        </button>
+                      </div>
+                    </div>
+
+                    <details className="details-panel compare-details">
+                      <summary>Command and website markup</summary>
+                      <h3>FFmpeg Command</h3>
+                      <pre>{job.ffmpegCommand}</pre>
+                      <h3>Website Markup</h3>
+                      <pre>{videoMarkup}</pre>
+                      <div className="notice info">{nextExportSuggestion(job.settings)}</div>
+                    </details>
+                  </div>
+                ) : (
+                  <div className="panel empty-panel">
+                    <SectionHeader icon={<BadgeCheck size={20} />} title="No Export Yet" />
+                    <p className="muted">
+                      Choose a preset, review the export summary, and process the video. The comparison view will open
+                      up here.
+                    </p>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {video && activeView === "captions" && (
+              <section className="workflow-section" id="captions">
+                <SectionHeader
+                  icon={<Captions size={21} />}
+                  title="Subtitle Theatre"
+                  kicker="Preview captions like a browser text track, then clean up the WebVTT source."
+                />
+                {editingSubtitleJob ? (
+                  <div className="caption-theater">
+                    <div className="subtitle-editor-header">
+                      <div>
+                        <strong>{editingSubtitleJob.outputFileName ?? "Generated captions"}</strong>
+                        <span>Save updates the VTT file and regenerates the SRT sidecar.</span>
+                      </div>
+                      <div className="actions">
+                        <button className="button secondary" onClick={() => setActiveView("outputs")}>
+                          <Package size={17} />
+                          Back To Outputs
+                        </button>
+                        <button
+                          className="button primary"
+                          onClick={() => void saveSubtitleEdits()}
+                          disabled={isSavingSubtitles}
+                        >
+                          <Save size={17} />
+                          {isSavingSubtitles ? "Saving..." : "Save Captions"}
+                        </button>
+                        <button
+                          className="button secondary"
+                          onClick={() => setSubtitleDraft((current) => cleanSubtitleDraft(current))}
+                        >
+                          <Sparkles size={17} />
+                          Clean Transcript
+                        </button>
+                        <a
+                          className="button secondary"
+                          href={`${apiBaseUrl}/api/jobs/${editingSubtitleJob.id}/download`}
+                        >
+                          <Download size={17} />
+                          VTT
+                        </a>
+                        {editingSubtitleJob.sidecarFileName && (
+                          <a
+                            className="button secondary"
+                            href={`${apiBaseUrl}/api/jobs/${editingSubtitleJob.id}/sidecar`}
+                          >
+                            <Download size={17} />
+                            SRT
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                    <div className="subtitle-stage">
+                      <video
+                        key={`${editingSubtitleJob.id}-${subtitlePreviewKey}`}
+                        controls
+                        crossOrigin="anonymous"
+                        preload="metadata"
+                        src={sourceUrl}
+                        onLoadedMetadata={(event) => {
+                          const [track] = Array.from(event.currentTarget.textTracks);
+                          if (track) track.mode = "showing";
+                        }}
+                      >
+                        <track
+                          src={`${apiBaseUrl}/api/jobs/${editingSubtitleJob.id}/output?preview=${subtitlePreviewKey}`}
+                          kind="subtitles"
+                          srcLang="en"
+                          label="English"
+                          default
+                        />
+                      </video>
+                      <div className="subtitle-stage-label">
+                        <Captions size={17} />
+                        Browser subtitle preview
+                      </div>
+                    </div>
+                    <div className="subtitle-editor-drawer">
+                      <div className="subtitle-editor-copy">
+                        <label className="label-row" htmlFor="subtitle-draft">
+                          WebVTT captions
+                          <Help text="Keep the WEBVTT header and cue timings. Save updates the VTT and regenerates SRT automatically." />
+                        </label>
+                        <p className="muted">
+                          Preview uses the last saved file. After editing, save captions and replay this theatre preview
+                          to check timing and wording.
+                        </p>
+                      </div>
+                      <textarea
+                        id="subtitle-draft"
+                        value={subtitleDraft}
+                        spellCheck
+                        onChange={(event) => setSubtitleDraft(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="panel empty-panel">
+                    <SectionHeader icon={<Captions size={20} />} title="No Captions Selected" />
+                    <p className="muted">
+                      Open a completed caption output from Jobs & Outputs to review and edit it here.
+                    </p>
+                    <button className="button secondary" onClick={() => setActiveView("outputs")}>
+                      Back To Outputs
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
+          </>
+        )}
       </section>
 
       {activePosterPreview && activePosterUrl && (
@@ -2272,23 +2882,48 @@ function App() {
             <div className="lightbox-toolbar">
               <div>
                 <strong>{activePosterPreview.outputFileName ?? "Generated poster"}</strong>
-                <span>{Math.round(posterZoom * 100)}% zoom{posterZoom > 1 ? " / drag to pan" : ""}</span>
+                <span>
+                  {Math.round(posterZoom * 100)}% zoom{posterZoom > 1 ? " / drag to pan" : ""}
+                </span>
               </div>
               <div className="lightbox-actions">
-                <button className="icon-button" type="button" onClick={() => updatePosterZoom(posterZoom - 0.25)} disabled={posterZoom <= 1} aria-label="Zoom out">
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => updatePosterZoom(posterZoom - 0.25)}
+                  disabled={posterZoom <= 1}
+                  aria-label="Zoom out"
+                >
                   <ZoomOut size={18} />
                 </button>
-                <button className="icon-button" type="button" onClick={() => updatePosterZoom(1)} disabled={posterZoom === 1 && posterPan.x === 0 && posterPan.y === 0} aria-label="Reset poster zoom">
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => updatePosterZoom(1)}
+                  disabled={posterZoom === 1 && posterPan.x === 0 && posterPan.y === 0}
+                  aria-label="Reset poster zoom"
+                >
                   1x
                 </button>
-                <button className="icon-button" type="button" onClick={() => updatePosterZoom(posterZoom + 0.25)} disabled={posterZoom >= 4} aria-label="Zoom in">
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={() => updatePosterZoom(posterZoom + 0.25)}
+                  disabled={posterZoom >= 4}
+                  aria-label="Zoom in"
+                >
                   <ZoomIn size={18} />
                 </button>
                 <a className="button secondary" href={`${apiBaseUrl}/api/jobs/${activePosterPreview.id}/download`}>
                   <Download size={17} />
                   Download
                 </a>
-                <button className="icon-button" type="button" onClick={closePosterLightbox} aria-label="Close poster preview">
+                <button
+                  className="icon-button"
+                  type="button"
+                  onClick={closePosterLightbox}
+                  aria-label="Close poster preview"
+                >
                   <X size={19} />
                 </button>
               </div>
