@@ -1,0 +1,10 @@
+node_modules/
+dist/
+build/
+.vite/
+coverage/
+data/
+.agents/
+.codex/
+*.zip
+package-lock.json
