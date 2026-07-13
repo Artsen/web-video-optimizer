@@ -8,16 +8,6 @@ import type {
   VideoRecordDto
 } from "@local-video-optimizer/contracts";
 
-export type VideoEntity = VideoRecordDto & {
-  storedPath: string;
-  sourceHash?: string;
-};
-
-export type JobEntity = JobDto & {
-  outputPath?: string;
-  sidecarPath?: string;
-};
-
 export type UploadedVideoFile = {
   path?: string;
   originalName: string;

@@ -105,6 +105,12 @@ The initial unit tests cover pure behavior extracted from the current API and we
 - Output-size estimation
 - Web export recommendation logic
 - Frontend codec/container compatibility normalization
+- In-memory video and job repository contracts, including replacement, deletion, lookup, instance isolation, and fresh
+  arrays from collection reads
+- File-backed manifest-store behavior using temporary directories, including missing manifests, formatted JSON,
+  malformed-manifest warnings, path isolation, and preservation of private persisted fields
+- Runtime isolation with injected repositories and manifest stores, including isolated videos, jobs, directory
+  configuration, manifest restoration, and DTO privacy
 
 The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
 argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
@@ -114,6 +120,10 @@ API route tests use Supertest directly against `createApp(fakeRuntime)`. They ex
 SSE/download-adjacent response behavior where practical, shared-schema parsing, and privacy assertions without opening
 a network port or initializing production storage. The fake runtime is intentionally small and deterministic; it is not
 a production service abstraction.
+
+Manifest tests intentionally separate persistence mechanics from persistence policy. The file store owns loading and
+writing the current JSON shape. Runtime tests cover policy such as startup normalization, restoring only eligible
+records, and keeping public DTOs free of private paths and hashes.
 
 ## Not Covered Yet
 

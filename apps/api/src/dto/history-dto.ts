@@ -1,5 +1,6 @@
 import type { HistorySnapshot } from "@local-video-optimizer/contracts";
-import type { JobEntity, VideoEntity } from "../runtime/api-runtime.js";
+import type { JobEntity } from "../entities/job-entity.js";
+import type { VideoEntity } from "../entities/video-entity.js";
 import { toJobDto } from "./job-dto.js";
 import { toVideoRecordDto } from "./video-dto.js";
 

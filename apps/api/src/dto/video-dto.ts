@@ -1,5 +1,5 @@
 import type { VideoRecordDto } from "@local-video-optimizer/contracts";
-import type { VideoEntity } from "../runtime/api-runtime.js";
+import type { VideoEntity } from "../entities/video-entity.js";
 
 export function toVideoRecordDto(video: VideoEntity): VideoRecordDto {
   return {
