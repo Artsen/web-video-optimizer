@@ -1318,6 +1318,17 @@ video {
   margin-top: 0;
 }
 
+.compare-media-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.compare-media-error span {
+  overflow-wrap: anywhere;
+}
+
 .poster-preview {
   display: grid;
   gap: 10px;

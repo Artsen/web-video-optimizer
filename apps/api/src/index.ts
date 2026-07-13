@@ -14,6 +14,7 @@ import {
   assertLooksLikeVtt,
   buildFfmpegArgs,
   defaultSettings,
+  parseByteRange,
   parseNumber,
   parseRate,
   sanitizeFileName,
@@ -713,16 +714,14 @@ async function streamVideoFile(
     return;
   }
 
-  const [startText, endText] = range.replace(/bytes=/, "").split("-");
-  const start = Number(startText);
-  const end = endText ? Number(endText) : fileStat.size - 1;
-
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || end >= fileStat.size) {
+  const parsedRange = parseByteRange(range, fileStat.size);
+  if (!parsedRange) {
     res.status(416).setHeader("Content-Range", `bytes */${fileStat.size}`);
     res.end();
     return;
   }
 
+  const { start, end } = parsedRange;
   res.status(206);
   res.setHeader("Content-Range", `bytes ${start}-${end}/${fileStat.size}`);
   res.setHeader("Content-Length", end - start + 1);

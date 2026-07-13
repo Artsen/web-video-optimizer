@@ -372,6 +372,18 @@ function buildVideoMarkup(job: Job, settings: Settings): string {
 </video>`;
 }
 
+function describeMediaError(video: HTMLVideoElement): string {
+  const error = video.error;
+  if (!error) return "Media could not be loaded.";
+  if (error.code === MediaError.MEDIA_ERR_NETWORK) return "Media request failed while loading this output.";
+  if (error.code === MediaError.MEDIA_ERR_DECODE) return "Media loaded, but this browser could not decode it.";
+  if (error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) {
+    return "This browser cannot preview this output format or codec.";
+  }
+  if (error.code === MediaError.MEDIA_ERR_ABORTED) return "Media loading was aborted.";
+  return error.message || "Media could not be loaded.";
+}
+
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="field">
@@ -469,6 +481,7 @@ function App() {
   const [subtitleDraft, setSubtitleDraft] = React.useState("");
   const [subtitlePreviewKey, setSubtitlePreviewKey] = React.useState(0);
   const [isSavingSubtitles, setIsSavingSubtitles] = React.useState(false);
+  const [compareMediaErrors, setCompareMediaErrors] = React.useState<{ original?: string; optimized?: string }>({});
   const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
   const [posterTimestamp, setPosterTimestamp] = React.useState(0);
   const sourcePreviewRef = React.useRef<HTMLVideoElement | null>(null);
@@ -636,6 +649,7 @@ function App() {
 
   function loadVideoRecord(record: VideoRecord) {
     setVideo(record);
+    setCompareMediaErrors({});
     setSourceNameDraft(record.originalName);
     setActiveTab("workflow");
     setActiveView("prepare");
@@ -800,6 +814,7 @@ function App() {
 
   function startNewVideo() {
     setVideo(null);
+    setCompareMediaErrors({});
     setJob(null);
     setSampleJob(null);
     setPosterJob(null);
@@ -1076,6 +1091,7 @@ function App() {
 
   function loadHistoryVideo(historyVideo: HistoryVideo) {
     setVideo(historyVideo);
+    setCompareMediaErrors({});
     setSourceNameDraft(historyVideo.originalName);
     const latestEncode = history.jobs.find(
       (historyJob) => historyJob.videoId === historyVideo.id && historyJob.kind === "encode"
@@ -1119,6 +1135,7 @@ function App() {
   }
 
   function selectVariation(nextJob: Job) {
+    setCompareMediaErrors({});
     if (nextJob.kind === "encode") setJob(nextJob);
     if (nextJob.kind === "sample") setSampleJob(nextJob);
     if (nextJob.kind === "poster") setPosterJob(nextJob);
@@ -2627,6 +2644,13 @@ function App() {
                           controls
                           ref={originalCompareRef}
                           src={sourceUrl}
+                          onLoadedData={() => setCompareMediaErrors((current) => ({ ...current, original: undefined }))}
+                          onError={(event) =>
+                            setCompareMediaErrors((current) => ({
+                              ...current,
+                              original: describeMediaError(event.currentTarget)
+                            }))
+                          }
                           onPlay={() => syncVideoState("original", "play")}
                           onPause={() => syncVideoState("original", "pause")}
                           onSeeked={() => syncVideoState("original", "seek")}
@@ -2640,6 +2664,15 @@ function App() {
                           controls
                           ref={optimizedCompareRef}
                           src={outputUrl}
+                          onLoadedData={() =>
+                            setCompareMediaErrors((current) => ({ ...current, optimized: undefined }))
+                          }
+                          onError={(event) =>
+                            setCompareMediaErrors((current) => ({
+                              ...current,
+                              optimized: describeMediaError(event.currentTarget)
+                            }))
+                          }
                           onPlay={() => syncVideoState("optimized", "play")}
                           onPause={() => syncVideoState("optimized", "pause")}
                           onSeeked={() => syncVideoState("optimized", "seek")}
@@ -2647,6 +2680,20 @@ function App() {
                         />
                       </div>
                     </div>
+
+                    {(compareMediaErrors.original || compareMediaErrors.optimized) && (
+                      <div className="notice warn compare-media-error">
+                        <strong>Preview issue</strong>
+                        {compareMediaErrors.original && <span>Original: {compareMediaErrors.original}</span>}
+                        {compareMediaErrors.optimized && <span>Optimized: {compareMediaErrors.optimized}</span>}
+                        {compareMediaErrors.optimized && (
+                          <a className="button secondary" href={downloadUrl}>
+                            <Download size={17} />
+                            Download Instead
+                          </a>
+                        )}
+                      </div>
+                    )}
 
                     <div className="theater-footer">
                       <div className="theater-stats">
