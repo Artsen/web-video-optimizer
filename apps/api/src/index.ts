@@ -9,6 +9,18 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import multer from "multer";
 import { nanoid } from "nanoid";
+import {
+  analyzeWebFriendliness,
+  assertLooksLikeVtt,
+  buildFfmpegArgs,
+  defaultSettings,
+  parseNumber,
+  parseRate,
+  sanitizeFileName,
+  shiftCaptionTimings,
+  vttToSrt
+} from "./video-domain.js";
+import type { FFprobeResult, FFprobeStream, OptimizationSettings, VideoMetadata } from "./video-domain.js";
 
 const mkdir = promisify(fs.mkdir);
 const rm = promisify(fs.rm);
@@ -22,73 +34,6 @@ const outputDir = path.join(storageRoot, "outputs");
 const tmpDir = path.join(storageRoot, "tmp");
 const manifestPath = path.join(storageRoot, "manifest.json");
 
-type FFprobeStream = {
-  index?: number;
-  codec_type?: string;
-  codec_name?: string;
-  width?: number;
-  height?: number;
-  display_aspect_ratio?: string;
-  avg_frame_rate?: string;
-  r_frame_rate?: string;
-  bit_rate?: string;
-  sample_rate?: string;
-  channels?: number;
-  pix_fmt?: string;
-  color_space?: string;
-  color_transfer?: string;
-  color_primaries?: string;
-  tags?: Record<string, string>;
-  side_data_list?: Array<Record<string, unknown>>;
-};
-
-type FFprobeResult = {
-  format?: {
-    filename?: string;
-    format_name?: string;
-    format_long_name?: string;
-    duration?: string;
-    size?: string;
-    bit_rate?: string;
-    tags?: Record<string, string>;
-  };
-  streams?: FFprobeStream[];
-};
-
-type VideoMetadata = {
-  fileName: string;
-  fileSize: number;
-  durationSeconds: number;
-  container: string;
-  formatLongName?: string;
-  videoCodec?: string;
-  audioCodec?: string;
-  trackCounts: {
-    video: number;
-    audio: number;
-    subtitle: number;
-  };
-  width?: number;
-  height?: number;
-  displayAspectRatio?: string;
-  frameRate?: number;
-  overallBitrate?: number;
-  videoBitrate?: number;
-  audioBitrate?: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  pixelFormat?: string;
-  color?: {
-    space?: string;
-    transfer?: string;
-    primaries?: string;
-  };
-  rotation?: string;
-  tags?: Record<string, string>;
-  webFriendly: boolean;
-  warnings: string[];
-};
-
 type VideoRecord = {
   id: string;
   originalName: string;
@@ -96,26 +41,6 @@ type VideoRecord = {
   uploadedAt: string;
   sourceHash?: string;
   metadata: VideoMetadata;
-};
-
-type OptimizationSettings = {
-  outputContainer: "mp4" | "webm";
-  videoCodec: "libx264" | "libaom-av1" | "libvpx-vp9";
-  audioCodec: "aac" | "libopus";
-  width?: number;
-  height?: number;
-  crf: number;
-  preset: "ultrafast" | "superfast" | "veryfast" | "faster" | "fast" | "medium" | "slow";
-  cpuUsed?: number;
-  rowMt?: boolean;
-  frameRate?: number;
-  audioMode: "keep" | "compress" | "remove";
-  audioBitrateKbps?: number;
-  audioSampleRate?: number;
-  audioChannels?: number;
-  fastStart: boolean;
-  stripMetadata: boolean;
-  outputFilename?: string;
 };
 
 type Job = {
@@ -186,11 +111,13 @@ async function removeVideoRecord(video: VideoRecord): Promise<void> {
 async function pruneDirectory(directory: string, keepPaths: Set<string>): Promise<void> {
   if (!fs.existsSync(directory)) return;
   const entries = await fs.promises.readdir(directory, { withFileTypes: true });
-  await Promise.all(entries.map(async (entry) => {
-    const fullPath = path.join(directory, entry.name);
-    if (keepPaths.has(path.resolve(fullPath))) return;
-    await rm(fullPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
-  }));
+  await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(directory, entry.name);
+      if (keepPaths.has(path.resolve(fullPath))) return;
+      await rm(fullPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
+    })
+  );
 }
 
 async function pruneOrphanFiles(): Promise<void> {
@@ -207,7 +134,11 @@ async function pruneOrphanFiles(): Promise<void> {
   ]);
 }
 
-async function createVideoRecordFromFile(filePath: string, originalName: string, uploadedAt = new Date().toISOString()): Promise<VideoRecord> {
+async function createVideoRecordFromFile(
+  filePath: string,
+  originalName: string,
+  uploadedAt = new Date().toISOString()
+): Promise<VideoRecord> {
   const sourceHash = await fileHash(filePath);
   const existing = Array.from(videos.values()).find((video) => video.sourceHash === sourceHash);
   if (existing) {
@@ -247,20 +178,24 @@ async function downloadVideoFromUrl(url: string): Promise<VideoRecord> {
 
   try {
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(ytDlpCommand, [
-        "--no-playlist",
-        "--restrict-filenames",
-        "--windows-filenames",
-        "--newline",
-        ...ytDlpJsRuntimeArgs(),
-        "-f",
-        "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        outputTemplate,
-        url
-      ], { windowsHide: true });
+      const child = spawn(
+        ytDlpCommand,
+        [
+          "--no-playlist",
+          "--restrict-filenames",
+          "--windows-filenames",
+          "--newline",
+          ...ytDlpJsRuntimeArgs(),
+          "-f",
+          "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+          "--merge-output-format",
+          "mp4",
+          "-o",
+          outputTemplate,
+          url
+        ],
+        { windowsHide: true }
+      );
       let stdout = "";
       let stderr = "";
       child.stdout.on("data", (chunk) => {
@@ -343,7 +278,7 @@ async function loadManifest(): Promise<void> {
       if (fs.existsSync(video.storedPath)) {
         videos.set(video.id, {
           ...video,
-          sourceHash: video.sourceHash ?? await fileHash(video.storedPath)
+          sourceHash: video.sourceHash ?? (await fileHash(video.storedPath))
         });
       }
     }
@@ -366,20 +301,6 @@ async function loadManifest(): Promise<void> {
   }
 }
 
-function parseRate(rate?: string): number | undefined {
-  if (!rate || rate === "0/0") return undefined;
-  const [num, den] = rate.split("/").map(Number);
-  if (!Number.isFinite(num)) return undefined;
-  if (!den) return num;
-  return Math.round((num / den) * 100) / 100;
-}
-
-function parseNumber(value?: string): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 function findRotation(stream?: FFprobeStream): string | undefined {
   const rotateTag = stream?.tags?.rotate;
   if (rotateTag) return `${rotateTag}deg`;
@@ -387,37 +308,6 @@ function findRotation(stream?: FFprobeStream): string | undefined {
   const sideData = stream?.side_data_list?.find((item) => "rotation" in item);
   const rotation = sideData?.rotation;
   return typeof rotation === "number" ? `${rotation}deg` : undefined;
-}
-
-function analyzeWebFriendliness(metadata: Omit<VideoMetadata, "webFriendly" | "warnings">): {
-  webFriendly: boolean;
-  warnings: string[];
-} {
-  const warnings: string[] = [];
-  const container = metadata.container.toLowerCase();
-  const videoCodec = metadata.videoCodec?.toLowerCase();
-  const audioCodec = metadata.audioCodec?.toLowerCase();
-
-  if (!container.includes("mp4") && !container.includes("webm")) {
-    warnings.push("Container is not a typical web delivery format. MP4 or WebM is recommended.");
-  }
-  if (videoCodec && !["h264", "avc1", "vp9", "av1"].includes(videoCodec)) {
-    warnings.push(`Video codec ${metadata.videoCodec} may have limited browser support.`);
-  }
-  if (audioCodec && !["aac", "opus", "mp3"].includes(audioCodec)) {
-    warnings.push(`Audio codec ${metadata.audioCodec} may have limited browser support.`);
-  }
-  if (metadata.pixelFormat && metadata.pixelFormat !== "yuv420p") {
-    warnings.push(`Pixel format ${metadata.pixelFormat} may not play reliably in all browsers.`);
-  }
-  if (metadata.overallBitrate && metadata.overallBitrate > 8_000_000) {
-    warnings.push("Overall bitrate is high for many web pages and may benefit from compression.");
-  }
-
-  return {
-    webFriendly: warnings.length === 0,
-    warnings
-  };
 }
 
 function normalizeProbe(fileName: string, probe: FFprobeResult): VideoMetadata {
@@ -539,8 +429,12 @@ async function commandExists(command: string, args = ["--help"]): Promise<boolea
   });
 }
 
-async function speechCapabilities(): Promise<{ whisperCpp: boolean; whisperModel: boolean; whisperCommand?: string; whisperModelPath?: string }> {
-  const configuredCommand = process.env.WHISPER_CPP_BIN;
+async function speechCapabilities(): Promise<{
+  whisperCpp: boolean;
+  whisperModel: boolean;
+  whisperCommand?: string;
+  whisperModelPath?: string;
+}> {
   const configuredModel = process.env.WHISPER_CPP_MODEL;
   const whisperCommand = await resolveWhisperCommand();
 
@@ -593,10 +487,6 @@ function ytDlpJsRuntimeArgs(): string[] {
   return ["--js-runtimes", ytDlpJsRuntimeValue()];
 }
 
-function sanitizeFileName(name: string): string {
-  return name.replace(/[^a-z0-9._-]/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
-}
-
 function publicJob(job: Job): Job {
   return { ...job };
 }
@@ -605,9 +495,10 @@ function renamedOutputFileName(currentName: string, nextName: string): string {
   const cleanName = sanitizeFileName(path.parse(nextName).name);
   const currentExtension = path.extname(currentName);
   const requestedExtension = path.extname(nextName);
-  const extension = requestedExtension && requestedExtension.toLowerCase() === currentExtension.toLowerCase()
-    ? requestedExtension
-    : currentExtension;
+  const extension =
+    requestedExtension && requestedExtension.toLowerCase() === currentExtension.toLowerCase()
+      ? requestedExtension
+      : currentExtension;
   return `${cleanName || path.parse(currentName).name}${extension}`;
 }
 
@@ -642,78 +533,14 @@ function historySnapshot() {
       originalName: video.originalName,
       uploadedAt: video.uploadedAt,
       metadata: video.metadata,
-      jobIds: Array.from(jobs.values()).filter((job) => job.videoId === video.id).map((job) => job.id)
+      jobIds: Array.from(jobs.values())
+        .filter((job) => job.videoId === video.id)
+        .map((job) => job.id)
     })),
-    jobs: Array.from(jobs.values()).map(publicJob).sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+    jobs: Array.from(jobs.values())
+      .map(publicJob)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
   };
-}
-
-function buildFfmpegArgs(inputPath: string, outputPath: string, settings: OptimizationSettings, durationLimitSeconds?: number): string[] {
-  const args = ["-y", "-i", inputPath, "-map", "0:v:0"];
-  const filters: string[] = [];
-
-  if (settings.audioMode !== "remove") {
-    args.push("-map", "0:a?");
-  }
-
-  args.push("-c:v", settings.videoCodec);
-
-  if (settings.videoCodec === "libx264") {
-    args.push("-crf", String(settings.crf), "-preset", settings.preset);
-  }
-
-  if (settings.videoCodec === "libaom-av1") {
-    args.push("-crf", String(settings.crf), "-b:v", "0", "-cpu-used", String(settings.cpuUsed ?? 5));
-    if (settings.rowMt ?? true) args.push("-row-mt", "1");
-  }
-
-  if (settings.videoCodec === "libvpx-vp9") {
-    args.push("-crf", String(settings.crf), "-b:v", "0", "-deadline", "good", "-cpu-used", String(settings.cpuUsed ?? 3));
-  }
-
-  args.push("-pix_fmt", "yuv420p");
-
-  if (settings.width || settings.height) {
-    const width = settings.width ? String(settings.width) : "-2";
-    const height = settings.height ? String(settings.height) : "-2";
-    filters.push(`scale=${width}:${height}:force_original_aspect_ratio=decrease`);
-  }
-  if (settings.frameRate) {
-    filters.push(`fps=${settings.frameRate}`);
-  }
-  if (filters.length > 0) {
-    args.push("-vf", filters.join(","));
-  }
-
-  if (settings.audioMode === "remove") {
-    args.push("-an");
-  } else {
-    args.push("-c:a", settings.audioCodec);
-    if (settings.audioMode === "compress" && settings.audioBitrateKbps) {
-      args.push("-b:a", `${settings.audioBitrateKbps}k`);
-    }
-    if (settings.audioChannels) {
-      args.push("-ac", String(settings.audioChannels));
-    }
-    if (settings.audioSampleRate) {
-      args.push("-ar", String(settings.audioSampleRate));
-    }
-  }
-
-  if (settings.stripMetadata) {
-    args.push("-map_metadata", "-1");
-  }
-
-  if (settings.fastStart && settings.outputContainer === "mp4") {
-    args.push("-movflags", "+faststart");
-  }
-
-  if (durationLimitSeconds) {
-    args.push("-t", String(durationLimitSeconds));
-  }
-
-  args.push(outputPath);
-  return args;
 }
 
 function commandPreview(args: string[]): string {
@@ -806,11 +633,7 @@ function createZip(entries: Array<{ name: string; data: Buffer }>): Buffer {
 }
 
 function escapeHtml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 function jsonForHtml(value: unknown): string {
@@ -818,7 +641,9 @@ function jsonForHtml(value: unknown): string {
 }
 
 function compactJsonObject<T extends Record<string, unknown>>(value: T): T {
-  return Object.fromEntries(Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== "")) as T;
+  return Object.fromEntries(
+    Object.entries(value).filter(([, entryValue]) => entryValue !== undefined && entryValue !== "")
+  ) as T;
 }
 
 function isoDuration(seconds: number): string | undefined {
@@ -835,13 +660,14 @@ function transcriptFromVtt(vtt: string): string {
     .replace(/\r\n/g, "\n")
     .split("\n")
     .map((line) => line.trim())
-    .filter((line) =>
-      line &&
-      !/^WEBVTT\b/i.test(line) &&
-      !/^NOTE\b/i.test(line) &&
-      !/^\d+$/.test(line) &&
-      !line.includes("-->") &&
-      !/^\[(?:BLANK_AUDIO|MUSIC|SILENCE|NOISE|APPLAUSE|LAUGHTER)\]$/i.test(line)
+    .filter(
+      (line) =>
+        line &&
+        !/^WEBVTT\b/i.test(line) &&
+        !/^NOTE\b/i.test(line) &&
+        !/^\d+$/.test(line) &&
+        !line.includes("-->") &&
+        !/^\[(?:BLANK_AUDIO|MUSIC|SILENCE|NOISE|APPLAUSE|LAUGHTER)\]$/i.test(line)
     )
     .join("\n")
     .replace(/\n{3,}/g, "\n\n");
@@ -855,7 +681,8 @@ function cleanCaptionText(text: string): string {
     .map((line) => line.trim())
     .filter((line) => !/^\[(?:BLANK_AUDIO|MUSIC|SILENCE|NOISE|APPLAUSE|LAUGHTER)\]$/i.test(line))
     .filter((line) => {
-      if (!line || line.includes("-->") || /^WEBVTT\b/i.test(line) || /^NOTE\b/i.test(line) || /^\d+$/.test(line)) return true;
+      if (!line || line.includes("-->") || /^WEBVTT\b/i.test(line) || /^NOTE\b/i.test(line) || /^\d+$/.test(line))
+        return true;
       const key = line.toLowerCase();
       if (seen.has(key)) return false;
       seen.add(key);
@@ -902,41 +729,12 @@ async function streamVideoFile(
   createReadStream(filePath, { start, end }).pipe(res);
 }
 
-function defaultSettings(settings: Partial<OptimizationSettings>): OptimizationSettings {
-  let outputContainer = settings.outputContainer ?? "mp4";
-  let videoCodec = settings.videoCodec ?? (outputContainer === "webm" ? "libaom-av1" : "libx264");
-
-  if (outputContainer === "webm" && videoCodec === "libx264") {
-    videoCodec = "libaom-av1";
-  }
-  if (videoCodec === "libvpx-vp9") {
-    outputContainer = "webm";
-  }
-
-  const audioCodec = settings.audioCodec ?? (outputContainer === "webm" ? "libopus" : "aac");
-
-  return {
-    outputContainer,
-    videoCodec,
-    audioCodec: outputContainer === "webm" && audioCodec === "aac" ? "libopus" : outputContainer === "mp4" && audioCodec === "libopus" ? "aac" : audioCodec,
-    width: settings.width,
-    height: settings.height,
-    crf: Math.min(Math.max(settings.crf ?? 24, 16), 40),
-    preset: settings.preset ?? "medium",
-    cpuUsed: Math.min(Math.max(settings.cpuUsed ?? 5, 0), 8),
-    rowMt: settings.rowMt ?? true,
-    frameRate: settings.frameRate,
-    audioMode: settings.audioMode ?? "compress",
-    audioBitrateKbps: settings.audioBitrateKbps ?? 128,
-    audioSampleRate: settings.audioSampleRate,
-    audioChannels: settings.audioChannels,
-    fastStart: settings.fastStart ?? true,
-    stripMetadata: settings.stripMetadata ?? true,
-    outputFilename: settings.outputFilename
-  };
-}
-
-function createEncodeJob(video: VideoRecord, settings: OptimizationSettings, kind: Job["kind"], suffix = "optimized"): Job {
+function createEncodeJob(
+  video: VideoRecord,
+  settings: OptimizationSettings,
+  kind: Job["kind"],
+  suffix = "optimized"
+): Job {
   const jobId = nanoid();
   const baseName = sanitizeFileName(settings.outputFilename || `${path.parse(video.originalName).name}-${suffix}`);
   const extension = settings.outputContainer === "webm" ? ".webm" : ".mp4";
@@ -966,12 +764,13 @@ function matchingSettings(a: OptimizationSettings, b: OptimizationSettings): boo
 }
 
 function reusableJob(video: VideoRecord, kind: Job["kind"], settings: OptimizationSettings): Job | undefined {
-  return Array.from(jobs.values()).find((job) =>
-    job.videoId === video.id &&
-    job.kind === kind &&
-    (job.status === "queued" || job.status === "running" || job.status === "completed") &&
-    matchingSettings(job.settings, settings) &&
-    (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
+  return Array.from(jobs.values()).find(
+    (job) =>
+      job.videoId === video.id &&
+      job.kind === kind &&
+      (job.status === "queued" || job.status === "running" || job.status === "completed") &&
+      matchingSettings(job.settings, settings) &&
+      (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
   );
 }
 
@@ -1004,72 +803,19 @@ function createSubtitleJob(video: VideoRecord): Job {
   return job;
 }
 
-function vttToSrt(vtt: string): string {
-  const normalized = vtt.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const blocks = normalized
-    .split(/\n{2,}/)
-    .map((block) => block.trim())
-    .filter(Boolean)
-    .filter((block) => !/^WEBVTT\b/i.test(block) && !/^NOTE\b/i.test(block));
-  const cues: string[] = [];
-
-  for (const block of blocks) {
-    const lines = block.split("\n").filter((line) => line.trim().length > 0);
-    const timeIndex = lines.findIndex((line) => line.includes("-->"));
-    if (timeIndex === -1) continue;
-    const timing = lines[timeIndex].replace(/\./g, ",").replace(/\s+align:\S+|\s+position:\S+|\s+line:\S+|\s+size:\S+/g, "");
-    const text = lines.slice(timeIndex + 1).join("\n").trim();
-    if (!text) continue;
-    cues.push(`${cues.length + 1}\n${timing}\n${text}`);
-  }
-
-  return `${cues.join("\n\n")}\n`;
-}
-
-function assertLooksLikeVtt(vtt: string): void {
-  if (!vtt.includes("-->")) {
-    throw new Error("Caption text must contain at least one WebVTT cue with a timing arrow.");
-  }
-}
-
-function parseCaptionTimestamp(timestamp: string): number | undefined {
-  const match = timestamp.trim().match(/^(?:(\d{2,}):)?(\d{2}):(\d{2})[.,](\d{3})$/);
-  if (!match) return undefined;
-  const hours = Number(match[1] ?? 0);
-  const minutes = Number(match[2]);
-  const seconds = Number(match[3]);
-  const milliseconds = Number(match[4]);
-  return hours * 3600 + minutes * 60 + seconds + milliseconds / 1000;
-}
-
-function formatCaptionTimestamp(totalSeconds: number, separator: "." | "," = "."): string {
-  const totalMilliseconds = Math.max(0, Math.round(totalSeconds * 1000));
-  const hours = Math.floor(totalMilliseconds / 3_600_000);
-  const minutes = Math.floor((totalMilliseconds % 3_600_000) / 60_000);
-  const seconds = Math.floor((totalMilliseconds % 60_000) / 1000);
-  const milliseconds = totalMilliseconds % 1000;
-  return [
-    String(hours).padStart(2, "0"),
-    String(minutes).padStart(2, "0"),
-    String(seconds).padStart(2, "0")
-  ].join(":") + `${separator}${String(milliseconds).padStart(3, "0")}`;
-}
-
-function shiftCaptionTimings(captionText: string, offsetSeconds: number): string {
-  if (offsetSeconds <= 0) return captionText;
-  return captionText.replace(/(\d{2,}:\d{2}:\d{2}[.,]\d{3}|\d{2}:\d{2}[.,]\d{3})(\s+-->\s+)(\d{2,}:\d{2}:\d{2}[.,]\d{3}|\d{2}:\d{2}[.,]\d{3})/g, (line, start, arrow, end) => {
-    const startSeconds = parseCaptionTimestamp(start);
-    const endSeconds = parseCaptionTimestamp(end);
-    if (startSeconds === undefined || endSeconds === undefined) return line;
-    const separator = start.includes(",") ? "," : ".";
-    const endSeparator = end.includes(",") ? "," : separator;
-    return `${formatCaptionTimestamp(startSeconds + offsetSeconds, separator)}${arrow}${formatCaptionTimestamp(endSeconds + offsetSeconds, endSeparator)}`;
-  });
-}
-
 function detectLeadingSilence(inputPath: string): Promise<number> {
   return new Promise((resolve) => {
-    const args = ["-hide_banner", "-nostats", "-i", inputPath, "-af", "silencedetect=noise=-35dB:d=0.35", "-f", "null", "-"];
+    const args = [
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      inputPath,
+      "-af",
+      "silencedetect=noise=-35dB:d=0.35",
+      "-f",
+      "null",
+      "-"
+    ];
     const child = spawn("ffmpeg", args, { windowsHide: true });
     let stderr = "";
 
@@ -1082,7 +828,12 @@ function detectLeadingSilence(inputPath: string): Promise<number> {
       const firstEnd = stderr.match(/silence_end:\s*([0-9.]+)/);
       const silenceStart = firstStart ? Number(firstStart[1]) : undefined;
       const silenceEnd = firstEnd ? Number(firstEnd[1]) : undefined;
-      if (silenceStart !== undefined && silenceStart <= 0.25 && silenceEnd !== undefined && Number.isFinite(silenceEnd)) {
+      if (
+        silenceStart !== undefined &&
+        silenceStart <= 0.25 &&
+        silenceEnd !== undefined &&
+        Number.isFinite(silenceEnd)
+      ) {
         resolve(Math.max(0, Math.round(silenceEnd * 1000) / 1000));
         return;
       }
@@ -1099,7 +850,12 @@ function createMuxJob(video: VideoRecord, videoJob: Job, subtitleJob: Job): Job 
   const outputFileName = `${baseName}${extension}`;
   const outputPath = path.join(outputDir, `${jobId}-${outputFileName}`);
   const settings = defaultSettings({ ...videoJob.settings, outputFilename: baseName });
-  const args = buildMuxSubtitleArgs(videoJob.outputPath!, subtitleJob.outputPath!, outputPath, settings.outputContainer);
+  const args = buildMuxSubtitleArgs(
+    videoJob.outputPath!,
+    subtitleJob.outputPath!,
+    outputPath,
+    settings.outputContainer
+  );
   const job: Job = {
     id: jobId,
     videoId: video.id,
@@ -1118,7 +874,12 @@ function createMuxJob(video: VideoRecord, videoJob: Job, subtitleJob: Job): Job 
   return job;
 }
 
-function buildMuxSubtitleArgs(inputPath: string, subtitlePath: string, outputPath: string, container: OptimizationSettings["outputContainer"]): string[] {
+function buildMuxSubtitleArgs(
+  inputPath: string,
+  subtitlePath: string,
+  outputPath: string,
+  container: OptimizationSettings["outputContainer"]
+): string[] {
   const args = ["-y", "-i", inputPath, "-i", subtitlePath, "-map", "0", "-map", "1:0", "-c", "copy"];
   args.push("-c:s", container === "mp4" ? "mov_text" : "webvtt");
   args.push("-metadata:s:s:0", "language=eng", "-disposition:s:0", "default");
@@ -1128,7 +889,17 @@ function buildMuxSubtitleArgs(inputPath: string, subtitlePath: string, outputPat
 }
 
 function runMuxJob(job: Job, videoJob: Job, subtitleJob: Job): void {
-  const args = ["-progress", "pipe:1", "-nostats", ...buildMuxSubtitleArgs(videoJob.outputPath!, subtitleJob.outputPath!, job.outputPath!, job.settings.outputContainer)];
+  const args = [
+    "-progress",
+    "pipe:1",
+    "-nostats",
+    ...buildMuxSubtitleArgs(
+      videoJob.outputPath!,
+      subtitleJob.outputPath!,
+      job.outputPath!,
+      job.settings.outputContainer
+    )
+  ];
   const child = spawn("ffmpeg", args, { windowsHide: true });
   processes.set(job.id, child);
   job.status = "running";
@@ -1239,9 +1010,10 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
   const whisperArgs = ["-m", whisperModel, "-f", audioPath, "-osrt", "-ovtt", "-of", outputBasePath];
 
   job.progress = 8;
-  job.message = leadingSilenceSeconds > 0
-    ? `Detected ${leadingSilenceSeconds.toFixed(2)}s leading silence`
-    : "Extracting audio for subtitles";
+  job.message =
+    leadingSilenceSeconds > 0
+      ? `Detected ${leadingSilenceSeconds.toFixed(2)}s leading silence`
+      : "Extracting audio for subtitles";
   job.ffmpegCommand = `${commandPreview(extractArgs)} && ${[whisperCommand, ...whisperArgs].map((part) => (part.includes(" ") ? `"${part}"` : part)).join(" ")}`;
   void saveManifest();
 
@@ -1332,9 +1104,10 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
 
       job.status = "completed";
       job.progress = 100;
-      job.message = leadingSilenceSeconds > 0
-        ? `Subtitles generated with ${leadingSilenceSeconds.toFixed(2)}s leading-silence compensation`
-        : "Subtitles generated";
+      job.message =
+        leadingSilenceSeconds > 0
+          ? `Subtitles generated with ${leadingSilenceSeconds.toFixed(2)}s leading-silence compensation`
+          : "Subtitles generated";
       job.outputSize = (await stat(job.outputPath!)).size;
       void saveManifest();
     });
@@ -1342,7 +1115,20 @@ async function runSubtitleJob(job: Job, inputPath: string): Promise<void> {
 }
 
 function runPosterJob(job: Job, inputPath: string, atSeconds: number): void {
-  const args = ["-y", "-ss", String(atSeconds), "-i", inputPath, "-frames:v", "1", "-c:v", "libwebp", "-quality", "82", job.outputPath!];
+  const args = [
+    "-y",
+    "-ss",
+    String(atSeconds),
+    "-i",
+    inputPath,
+    "-frames:v",
+    "1",
+    "-c:v",
+    "libwebp",
+    "-quality",
+    "82",
+    job.outputPath!
+  ];
   const child = spawn("ffmpeg", args, { windowsHide: true });
   processes.set(job.id, child);
   job.status = "running";
@@ -1382,7 +1168,12 @@ function runPosterJob(job: Job, inputPath: string, atSeconds: number): void {
 }
 
 function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): void {
-  const args = ["-progress", "pipe:1", "-nostats", ...buildFfmpegArgs(inputPath, job.outputPath!, job.settings, durationLimitSeconds)];
+  const args = [
+    "-progress",
+    "pipe:1",
+    "-nostats",
+    ...buildFfmpegArgs(inputPath, job.outputPath!, job.settings, durationLimitSeconds)
+  ];
   const child = spawn("ffmpeg", args, { windowsHide: true });
   processes.set(job.id, child);
 
@@ -1440,7 +1231,8 @@ function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): voi
     job.outputSize = (await stat(job.outputPath!)).size;
     if (job.kind === "sample" && durationLimitSeconds) {
       const duration = videos.get(job.videoId)?.metadata.durationSeconds ?? 0;
-      const estimatedFullSize = duration > 0 ? Math.round((job.outputSize * duration) / durationLimitSeconds) : job.outputSize;
+      const estimatedFullSize =
+        duration > 0 ? Math.round((job.outputSize * duration) / durationLimitSeconds) : job.outputSize;
       const originalSize = videos.get(job.videoId)?.metadata.fileSize;
       job.sampleEstimate = {
         sampleSeconds: durationLimitSeconds,
@@ -1453,7 +1245,11 @@ function runJob(job: Job, inputPath: string, durationLimitSeconds?: number): voi
 }
 
 async function bootstrap(): Promise<void> {
-  await Promise.all([mkdir(uploadDir, { recursive: true }), mkdir(outputDir, { recursive: true }), mkdir(tmpDir, { recursive: true })]);
+  await Promise.all([
+    mkdir(uploadDir, { recursive: true }),
+    mkdir(outputDir, { recursive: true }),
+    mkdir(tmpDir, { recursive: true })
+  ]);
   await loadManifest();
   await mergeDuplicateVideos();
   await pruneOrphanFiles();
@@ -1475,7 +1271,7 @@ async function bootstrap(): Promise<void> {
   });
 
   app.get("/api/capabilities", async (_req, res) => {
-    res.json({ ...await ffmpegCapabilities(), ...await speechCapabilities(), ...await downloaderCapabilities() });
+    res.json({ ...(await ffmpegCapabilities()), ...(await speechCapabilities()), ...(await downloaderCapabilities()) });
   });
 
   app.get("/api/history", (_req, res) => {
@@ -1557,9 +1353,10 @@ async function bootstrap(): Promise<void> {
 
       const currentExtension = path.extname(video.originalName) || path.extname(video.storedPath) || ".mp4";
       const requestedExtension = path.extname(nextName);
-      const extension = requestedExtension && requestedExtension.toLowerCase() === currentExtension.toLowerCase()
-        ? requestedExtension
-        : currentExtension;
+      const extension =
+        requestedExtension && requestedExtension.toLowerCase() === currentExtension.toLowerCase()
+          ? requestedExtension
+          : currentExtension;
       video.originalName = `${cleanBase}${extension}`;
       video.metadata.fileName = video.originalName;
       await saveManifest();
@@ -1594,8 +1391,14 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    const settings = defaultSettings({ ...(req.body ?? {}), outputFilename: `${path.parse(video.originalName).name}-sample` });
-    const sampleSeconds = Math.min(Math.max(Number(req.body?.sampleSeconds ?? 5), 1), Math.max(1, video.metadata.durationSeconds || 5));
+    const settings = defaultSettings({
+      ...(req.body ?? {}),
+      outputFilename: `${path.parse(video.originalName).name}-sample`
+    });
+    const sampleSeconds = Math.min(
+      Math.max(Number(req.body?.sampleSeconds ?? 5), 1),
+      Math.max(1, video.metadata.durationSeconds || 5)
+    );
     const existing = reusableJob(video, "sample", settings);
     if (existing) {
       res.status(existing.status === "completed" ? 200 : 202).json(publicJob(existing));
@@ -1613,7 +1416,10 @@ async function bootstrap(): Promise<void> {
       return;
     }
 
-    const atSeconds = Math.min(Math.max(Number(req.body?.atSeconds ?? Math.min(1, video.metadata.durationSeconds / 2)), 0), Math.max(0, video.metadata.durationSeconds - 0.1));
+    const atSeconds = Math.min(
+      Math.max(Number(req.body?.atSeconds ?? Math.min(1, video.metadata.durationSeconds / 2)), 0),
+      Math.max(0, video.metadata.durationSeconds - 0.1)
+    );
     const jobId = nanoid();
     const baseName = sanitizeFileName(`${path.parse(video.originalName).name}-poster`);
     const outputFileName = `${baseName}.webp`;
@@ -1648,11 +1454,12 @@ async function bootstrap(): Promise<void> {
       res.status(400).json({ error: "No audio track found. Subtitles cannot be generated." });
       return;
     }
-    const existing = Array.from(jobs.values()).find((job) =>
-      job.videoId === video.id &&
-      job.kind === "subtitle" &&
-      (job.status === "queued" || job.status === "running" || job.status === "completed") &&
-      (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
+    const existing = Array.from(jobs.values()).find(
+      (job) =>
+        job.videoId === video.id &&
+        job.kind === "subtitle" &&
+        (job.status === "queued" || job.status === "running" || job.status === "completed") &&
+        (!job.outputPath || job.status !== "completed" || fs.existsSync(job.outputPath))
     );
     if (existing) {
       res.status(existing.status === "completed" ? 200 : 202).json(publicJob(existing));
@@ -1725,18 +1532,21 @@ async function bootstrap(): Promise<void> {
         return;
       }
 
-      const requestedJobIds = Array.isArray(req.body?.jobIds) ? req.body.jobIds as string[] : [];
+      const requestedJobIds = Array.isArray(req.body?.jobIds) ? (req.body.jobIds as string[]) : [];
       const packageMeta = req.body?.metadata ?? {};
       const packageTitle = String(packageMeta.title || path.parse(video.originalName).name).trim();
       const packageDescription = String(packageMeta.description || `Video for ${packageTitle}.`).trim();
       const packageLanguage = String(packageMeta.language || "en").trim() || "en";
-      const filenamePrefix = sanitizeFileName(String(packageMeta.filenamePrefix || path.parse(video.originalName).name).trim()) || sanitizeFileName(path.parse(video.originalName).name);
-      const candidateJobs = Array.from(jobs.values()).filter((job) =>
-        job.videoId === video.id &&
-        job.status === "completed" &&
-        job.outputPath &&
-        (job.kind === "encode" || job.kind === "mux" || job.kind === "poster" || job.kind === "subtitle") &&
-        (requestedJobIds.length === 0 || requestedJobIds.includes(job.id))
+      const filenamePrefix =
+        sanitizeFileName(String(packageMeta.filenamePrefix || path.parse(video.originalName).name).trim()) ||
+        sanitizeFileName(path.parse(video.originalName).name);
+      const candidateJobs = Array.from(jobs.values()).filter(
+        (job) =>
+          job.videoId === video.id &&
+          job.status === "completed" &&
+          job.outputPath &&
+          (job.kind === "encode" || job.kind === "mux" || job.kind === "poster" || job.kind === "subtitle") &&
+          (requestedJobIds.length === 0 || requestedJobIds.includes(job.id))
       );
       const encodeJobs = candidateJobs.filter((job) => job.kind === "encode" || job.kind === "mux");
       const posterJob = candidateJobs.find((job) => job.kind === "poster");
@@ -1748,16 +1558,23 @@ async function bootstrap(): Promise<void> {
 
       const posterName = posterJob?.outputFileName ?? "poster.webp";
       const preferredContentJob = encodeJobs.find((job) => job.settings.outputContainer === "mp4") ?? encodeJobs[0];
-      const sources = encodeJobs.map((job) => {
-        const type = job.settings.outputContainer === "webm" ? "video/webm" : "video/mp4";
-        return `    <source src="${escapeHtml(job.outputFileName!)}" type="${type}">`;
-      }).join("\n");
+      const sources = encodeJobs
+        .map((job) => {
+          const type = job.settings.outputContainer === "webm" ? "video/webm" : "video/mp4";
+          return `    <source src="${escapeHtml(job.outputFileName!)}" type="${type}">`;
+        })
+        .join("\n");
       const hasSilent = encodeJobs.some((job) => job.settings.audioMode === "remove");
-      const attrs = hasSilent ? "autoplay muted loop playsinline preload=\"metadata\"" : "controls preload=\"metadata\"";
-      const captionText = subtitleJob?.outputPath && fs.existsSync(subtitleJob.outputPath) ? cleanCaptionText(await fs.promises.readFile(subtitleJob.outputPath, "utf8")) : "";
+      const attrs = hasSilent ? 'autoplay muted loop playsinline preload="metadata"' : 'controls preload="metadata"';
+      const captionText =
+        subtitleJob?.outputPath && fs.existsSync(subtitleJob.outputPath)
+          ? cleanCaptionText(await fs.promises.readFile(subtitleJob.outputPath, "utf8"))
+          : "";
       const transcriptText = transcriptFromVtt(captionText);
       const transcriptName = subtitleJob?.outputFileName ? `${filenamePrefix}-transcript.txt` : "";
-      const track = subtitleJob?.outputFileName ? `    <track src="${escapeHtml(subtitleJob.outputFileName)}" kind="subtitles" srclang="${escapeHtml(packageLanguage)}" label="Captions" default>` : "";
+      const track = subtitleJob?.outputFileName
+        ? `    <track src="${escapeHtml(subtitleJob.outputFileName)}" kind="subtitles" srclang="${escapeHtml(packageLanguage)}" label="Captions" default>`
+        : "";
       const schema = compactJsonObject({
         "@context": "https://schema.org",
         "@type": "VideoObject",
@@ -1772,23 +1589,31 @@ async function bootstrap(): Promise<void> {
   <video ${attrs} poster="${escapeHtml(posterName)}" aria-label="${escapeHtml(packageTitle)}">
 ${sources}
   </video>
-  ${transcriptText ? `<figcaption>
+  ${
+    transcriptText
+      ? `<figcaption>
     <details>
       <summary>Transcript for ${escapeHtml(packageTitle)}</summary>
       <p>${escapeHtml(transcriptText).replace(/\n/g, "<br>")}</p>
     </details>
-  </figcaption>` : ""}
+  </figcaption>`
+      : ""
+  }
 </figure>`;
       const productionSnippet = `<figure class="web-video-embed">
   <video ${attrs} poster="${escapeHtml(posterName)}" aria-label="${escapeHtml(packageTitle)}">
 ${sources}${track ? `\n${track}` : ""}
   </video>
-  ${transcriptText ? `<figcaption>
+  ${
+    transcriptText
+      ? `<figcaption>
     <details>
       <summary>Transcript for ${escapeHtml(packageTitle)}</summary>
       <p>${escapeHtml(transcriptText).replace(/\n/g, "<br>")}</p>
     </details>
-  </figcaption>` : ""}
+  </figcaption>`
+      : ""
+  }
 </figure>
 <script type="application/ld+json">${jsonForHtml(schema)}</script>`;
       const html = `<!doctype html>
@@ -1882,14 +1707,21 @@ ${sources}${track ? `\n${track}` : ""}
         `Created: ${new Date().toISOString()}`,
         "",
         "Files:",
-        ...encodeJobs.map((job) => `- ${job.outputFileName} (${job.settings.outputContainer.toUpperCase()} / ${job.settings.videoCodec})`),
-        posterJob ? `- ${posterName} (poster image)` : "- poster.webp (placeholder referenced in embed.html; generate one in the app)",
-        subtitleJob?.outputFileName ? `- ${subtitleJob.outputFileName} (WebVTT captions)` : "- captions.vtt (optional; generate subtitles in the app)",
+        ...encodeJobs.map(
+          (job) =>
+            `- ${job.outputFileName} (${job.settings.outputContainer.toUpperCase()} / ${job.settings.videoCodec})`
+        ),
+        posterJob
+          ? `- ${posterName} (poster image)`
+          : "- poster.webp (placeholder referenced in embed.html; generate one in the app)",
+        subtitleJob?.outputFileName
+          ? `- ${subtitleJob.outputFileName} (WebVTT captions)`
+          : "- captions.vtt (optional; generate subtitles in the app)",
         subtitleJob?.sidecarFileName ? `- ${subtitleJob.sidecarFileName} (SRT captions)` : "",
         transcriptName ? `- ${transcriptName} (plain-text transcript)` : "",
         "- embed.html",
         "",
-        "Use preload=\"metadata\" for most website videos and keep silent hero videos muted + playsinline.",
+        'Use preload="metadata" for most website videos and keep silent hero videos muted + playsinline.',
         "",
         "Accessibility and SEO:",
         "- embed.html includes captions, a transcript disclosure, fixed video aspect-ratio styling, and VideoObject JSON-LD.",
@@ -1900,10 +1732,21 @@ ${sources}${track ? `\n${track}` : ""}
       ].join("\n");
 
       const entries = [
-        ...await Promise.all(encodeJobs.map(async (job) => ({ name: job.outputFileName!, data: await fs.promises.readFile(job.outputPath!) }))),
-        ...(posterJob?.outputPath ? [{ name: posterName, data: await fs.promises.readFile(posterJob.outputPath) }] : []),
-        ...(subtitleJob?.outputPath && subtitleJob.outputFileName ? [{ name: subtitleJob.outputFileName, data: await fs.promises.readFile(subtitleJob.outputPath) }] : []),
-        ...(subtitleJob?.sidecarPath && subtitleJob.sidecarFileName && fs.existsSync(subtitleJob.sidecarPath) ? [{ name: subtitleJob.sidecarFileName, data: await fs.promises.readFile(subtitleJob.sidecarPath) }] : []),
+        ...(await Promise.all(
+          encodeJobs.map(async (job) => ({
+            name: job.outputFileName!,
+            data: await fs.promises.readFile(job.outputPath!)
+          }))
+        )),
+        ...(posterJob?.outputPath
+          ? [{ name: posterName, data: await fs.promises.readFile(posterJob.outputPath) }]
+          : []),
+        ...(subtitleJob?.outputPath && subtitleJob.outputFileName
+          ? [{ name: subtitleJob.outputFileName, data: await fs.promises.readFile(subtitleJob.outputPath) }]
+          : []),
+        ...(subtitleJob?.sidecarPath && subtitleJob.sidecarFileName && fs.existsSync(subtitleJob.sidecarPath)
+          ? [{ name: subtitleJob.sidecarFileName, data: await fs.promises.readFile(subtitleJob.sidecarPath) }]
+          : []),
         ...(transcriptName && transcriptText ? [{ name: transcriptName, data: Buffer.from(transcriptText) }] : []),
         { name: "embed.html", data: Buffer.from(html) },
         { name: "README.txt", data: Buffer.from(readme) }
@@ -1915,7 +1758,12 @@ ${sources}${track ? `\n${track}` : ""}
       const outputPath = path.join(outputDir, `${packageId}-${outputFileName}`);
       await fs.promises.writeFile(outputPath, zip);
 
-      const job = createEncodeJob(video, defaultSettings({ outputFilename: path.parse(outputFileName).name }), "package", "web-package");
+      const job = createEncodeJob(
+        video,
+        defaultSettings({ outputFilename: path.parse(outputFileName).name }),
+        "package",
+        "web-package"
+      );
       job.status = "completed";
       job.progress = 100;
       job.message = "Web package created";
@@ -2043,7 +1891,10 @@ ${sources}${track ? `\n${track}` : ""}
       }
 
       const vtt = await fs.promises.readFile(job.outputPath, "utf8");
-      const srt = job.sidecarPath && fs.existsSync(job.sidecarPath) ? await fs.promises.readFile(job.sidecarPath, "utf8") : vttToSrt(vtt);
+      const srt =
+        job.sidecarPath && fs.existsSync(job.sidecarPath)
+          ? await fs.promises.readFile(job.sidecarPath, "utf8")
+          : vttToSrt(vtt);
       res.json({ vtt, srt });
     } catch (error) {
       next(error);
@@ -2078,11 +1929,23 @@ ${sources}${track ? `\n${track}` : ""}
     const videoJob = jobs.get(req.params.id);
     const subtitleJob = jobs.get(String(req.body?.subtitleJobId ?? ""));
     const video = videoJob ? videos.get(videoJob.videoId) : undefined;
-    if (!videoJob || !video || videoJob.status !== "completed" || !videoJob.outputPath || (videoJob.kind !== "encode" && videoJob.kind !== "mux")) {
+    if (
+      !videoJob ||
+      !video ||
+      videoJob.status !== "completed" ||
+      !videoJob.outputPath ||
+      (videoJob.kind !== "encode" && videoJob.kind !== "mux")
+    ) {
       res.status(404).json({ error: "Completed video output not found" });
       return;
     }
-    if (!subtitleJob || subtitleJob.videoId !== videoJob.videoId || subtitleJob.kind !== "subtitle" || subtitleJob.status !== "completed" || !subtitleJob.outputPath) {
+    if (
+      !subtitleJob ||
+      subtitleJob.videoId !== videoJob.videoId ||
+      subtitleJob.kind !== "subtitle" ||
+      subtitleJob.status !== "completed" ||
+      !subtitleJob.outputPath
+    ) {
       res.status(400).json({ error: "Completed subtitle output not found" });
       return;
     }
@@ -2139,8 +2002,8 @@ ${sources}${track ? `\n${track}` : ""}
 
   app.post("/api/history/delete", async (req, res, next) => {
     try {
-      const videoIds = Array.isArray(req.body?.videoIds) ? req.body.videoIds as string[] : [];
-      const jobIds = Array.isArray(req.body?.jobIds) ? req.body.jobIds as string[] : [];
+      const videoIds = Array.isArray(req.body?.videoIds) ? (req.body.videoIds as string[]) : [];
+      const jobIds = Array.isArray(req.body?.jobIds) ? (req.body.jobIds as string[]) : [];
 
       for (const jobId of jobIds) {
         const job = jobs.get(jobId);
@@ -2180,6 +2043,7 @@ ${sources}${track ? `\n${track}` : ""}
   });
 
   app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    void _next;
     const message = error instanceof Error ? error.message : "Unexpected server error";
     res.status(500).json({ error: message });
   });
