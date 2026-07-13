@@ -58,6 +58,12 @@ Run only the pure video-core tests:
 npm run test:run --workspace packages/video-core
 ```
 
+Run only the API tests:
+
+```bash
+npm run test:run --workspace apps/api
+```
+
 Run unit tests in watch mode:
 
 ```bash
@@ -81,6 +87,11 @@ npm run check
 The initial unit tests cover pure behavior extracted from the current API and web entry files:
 
 - Shared runtime contract schemas for public API/browser data
+- API configuration parsing
+- API route composition through `createApp`
+- Supertest route tests without binding a TCP port
+- API response schema compatibility with shared contracts
+- Privacy assertions that public JSON does not expose storage paths, output paths, sidecar paths, or source hashes
 - Pure video-core settings normalization, FFmpeg argument-array construction, FFprobe normalization, compatibility
   analysis, filename sanitization, caption utilities, and output-size estimation
 - Filename sanitization
@@ -99,10 +110,15 @@ The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. 
 argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
 future real-media integration tests.
 
+API route tests use Supertest directly against `createApp(fakeRuntime)`. They exercise HTTP extraction, status codes,
+SSE/download-adjacent response behavior where practical, shared-schema parsing, and privacy assertions without opening
+a network port or initializing production storage. The fake runtime is intentionally small and deterministic; it is not
+a production service abstraction.
+
 ## Not Covered Yet
 
-- Express route integration
-- File upload and cleanup behavior
+- Full production-runtime route integration
+- Real multipart upload storage and cleanup behavior
 - FFmpeg process execution and progress parsing
 - Browser rendering behavior
 - End-to-end package ZIP validation with real media
