@@ -49,6 +49,17 @@ export default tseslint.config(
     }
   },
   {
+    files: ["apps/api/src/app.ts", "apps/api/src/routes/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["react", "react-dom", "node:child_process"]
+        }
+      ]
+    }
+  },
+  {
     files: ["apps/web/src/**/*.{ts,tsx}"],
     plugins: {
       react,

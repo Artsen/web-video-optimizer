@@ -38,9 +38,27 @@ invocation, storage, job state, manifests, ZIP creation, and persistence. The we
 components, presentation wording, form-state behavior, recommendations, and browser UI state. Future CLI and MCP
 adapters should consume `packages/contracts` and `packages/video-core` rather than copying media-domain logic.
 
-Current compatibility note: some API responses still spread internal job or video entities directly, which can expose
-private implementation fields such as absolute filesystem paths. Phase 2A documents that behavior and preserves the
-existing wire shape; a later API hardening phase should introduce explicit DTO mapping before changing responses.
+## API Composition
+
+`apps/api/src/app.ts` exports `createApp(dependencies)`, the HTTP composition root used by tests and production. It
+registers middleware, route modules, and error handling, but it does not listen on a port, create storage directories,
+load manifests, or spawn media tools.
+
+`apps/api/src/server.ts` is the production startup adapter. It parses environment configuration, creates the production
+runtime, initializes storage and manifests, constructs the upload middleware, creates the Express app, and calls
+`listen`.
+
+Route modules in `apps/api/src/routes` are HTTP adapters. They extract request params, request bodies, multipart files,
+status codes, response headers, SSE mechanics, downloads, and byte-range streaming. They depend on the temporary
+coarse `ApiRuntime` boundary rather than global maps or production storage details.
+
+`apps/api/src/runtime/production-runtime.ts` still owns the existing production implementation: video/job state,
+manifest persistence, storage cleanup, FFmpeg/FFprobe/Whisper/yt-dlp execution, packaging, and file-manager reveal
+behavior. This is intentionally coarse for Phase 3; Phase 4 should split it into focused services and repositories.
+
+Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
+public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output
+paths, and sidecar paths are no longer part of public JSON responses.
 
 ## Data Flow
 
@@ -50,9 +68,10 @@ existing wire shape; a later API hardening phase should introduce explicit DTO m
 4. The API returns normalized metadata plus compatibility warnings.
 5. The user chooses optimization settings.
 6. The web app starts an encoding job with `POST /api/videos/:id/jobs`.
-7. The API runs FFmpeg locally and updates in-memory job state.
-8. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
-9. The final output is streamed from `GET /api/jobs/:id/download`.
+7. The route layer delegates job creation to `ApiRuntime`.
+8. The production runtime runs FFmpeg locally and updates in-memory job state.
+9. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
+10. The final output is streamed from `GET /api/jobs/:id/download`.
 
 ## Storage
 
