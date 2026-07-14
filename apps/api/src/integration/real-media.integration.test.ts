@@ -251,7 +251,11 @@ describe("real media compiled API integration", () => {
     let harness = await startCompiledApi({
       repoRoot,
       storageRoot,
-      env: { MAX_CONCURRENT_MEDIA_JOBS: "1", MEDIA_PROCESS_TIMEOUT_MS: "60000" }
+      env: {
+        MAX_CONCURRENT_MEDIA_JOBS: "1",
+        MEDIA_PROCESS_TIMEOUT_MS: "60000",
+        SHUTDOWN_GRACE_PERIOD_MS: "500"
+      }
     });
     const video = await uploadVideo(harness, sourcePath, "source.mp4");
     const first = await jsonRequest<JobDto>(`${harness.baseUrl}/api/videos/${video.id}/jobs`, {
