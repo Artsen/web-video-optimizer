@@ -1,5 +1,5 @@
 import express from "express";
-import type multer from "multer";
+import type { RequestHandler } from "express";
 import type { ApiConfig } from "./config.js";
 import { apiNotFound } from "./middleware/api-not-found.js";
 import { apiSecurityHeaders } from "./middleware/api-security-headers.js";
@@ -11,7 +11,7 @@ import type { ApiRuntime } from "./runtime/api-runtime.js";
 export type CreateAppDependencies = {
   config: Pick<ApiConfig, "corsOrigins" | "jsonBodyLimitBytes">;
   runtime: ApiRuntime;
-  upload: multer.Multer;
+  upload: RequestHandler;
 };
 
 export function createApp(dependencies: CreateAppDependencies): express.Express {

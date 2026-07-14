@@ -7,6 +7,7 @@ import type {
   VideoMetadata,
   VideoRecordDto
 } from "@local-video-optimizer/contracts";
+import type { OpenedStoredFile, StorageArea } from "../storage/storage-boundary.js";
 
 export type UploadedVideoFile = {
   path?: string;
@@ -17,6 +18,8 @@ export type UploadedVideoFile = {
 export type StreamDescriptor = {
   filePath: string;
   fileName: string;
+  area?: StorageArea;
+  open?: () => Promise<OpenedStoredFile>;
 };
 
 export type CaptionPayload = {

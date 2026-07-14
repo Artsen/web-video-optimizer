@@ -47,6 +47,7 @@ function config(storageRoot: string): ApiConfig {
     uploadDir: path.join(storageRoot, "uploads"),
     outputDir: path.join(storageRoot, "outputs"),
     tmpDir: path.join(storageRoot, "tmp"),
+    uploadStagingDir: path.join(storageRoot, "tmp", "upload-staging"),
     manifestPath: path.join(storageRoot, "manifest.json"),
     uploadFileSizeLimitBytes: 1234,
     maxConcurrentMediaJobs: 1,

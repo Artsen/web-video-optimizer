@@ -40,6 +40,23 @@ export async function generateAvFixture(outputPath: string, durationSeconds = 2)
   return ["ffmpeg", ...args];
 }
 
+export async function generateAudioFixture(outputPath: string, durationSeconds = 2): Promise<string[]> {
+  const args = [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    `sine=frequency=880:sample_rate=48000:duration=${durationSeconds}`,
+    "-c:a",
+    "aac",
+    "-b:a",
+    "96k",
+    outputPath
+  ];
+  await execFileAsync("ffmpeg", args, { windowsHide: true });
+  return ["ffmpeg", ...args];
+}
+
 export async function probeJson(filePath: string): Promise<Record<string, unknown>> {
   const result = await execFileAsync(
     "ffprobe",

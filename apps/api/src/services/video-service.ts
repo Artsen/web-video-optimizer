@@ -10,10 +10,10 @@ import type { MediaProbe } from "../infrastructure/tools/ffprobe-adapter.js";
 import type { VideoDownloader } from "../infrastructure/tools/yt-dlp-adapter.js";
 import type { VideoRepository, JobRepository } from "../repositories/repository-types.js";
 import type { UploadedVideoFile, StreamDescriptor } from "../runtime/api-runtime.js";
+import type { StorageBoundary } from "../storage/storage-boundary.js";
+import type { MediaAdmissionService } from "../uploads/media-admission-service.js";
 import type { CleanupService } from "./cleanup-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
-
-const removeOptions = { force: true, maxRetries: 5, retryDelay: 150 };
 
 export class VideoService {
   constructor(
@@ -24,19 +24,29 @@ export class VideoService {
     private readonly cleanup: CleanupService,
     private readonly persistence: StatePersistenceService,
     private readonly uploadDir: string,
-    private readonly tmpDir: string
+    private readonly tmpDir: string,
+    private readonly admission?: MediaAdmissionService,
+    private readonly storage?: StorageBoundary
   ) {}
 
   async createFromUpload(file: UploadedVideoFile): Promise<VideoRecordDto> {
     if (!file.path) {
       throw new Error("Uploaded file path is required");
     }
-    return toVideoRecordDto(await this.createRecordFromFile(file.path, file.originalName));
+    return toVideoRecordDto(
+      this.admission
+        ? await this.admission.admit({ path: file.path, originalName: file.originalName, area: "upload-staging" })
+        : await this.createRecordFromFile(file.path, file.originalName)
+    );
   }
 
   async createFromUrl(url: string): Promise<VideoRecordDto> {
     const importPath = await this.downloader.download(url, this.tmpDir);
-    return toVideoRecordDto(await this.createRecordFromFile(importPath, path.basename(importPath)));
+    return toVideoRecordDto(
+      this.admission
+        ? await this.admission.admit({ path: importPath, originalName: path.basename(importPath), area: "tmp" })
+        : await this.createRecordFromFile(importPath, path.basename(importPath))
+    );
   }
 
   get(id: string): VideoRecordDto | undefined {
@@ -50,14 +60,12 @@ export class VideoService {
 
   getSource(id: string): StreamDescriptor | undefined {
     const video = this.videos.get(id);
-    return video ? { filePath: video.storedPath, fileName: video.originalName } : undefined;
+    return video ? this.sourceDescriptor(video) : undefined;
   }
 
   getDownload(id: string): StreamDescriptor | undefined {
     const video = this.videos.get(id);
-    return video && fs.existsSync(video.storedPath)
-      ? { filePath: video.storedPath, fileName: video.originalName }
-      : undefined;
+    return video ? this.sourceDescriptor(video) : undefined;
   }
 
   async rename(id: string, originalName: string): Promise<VideoRecordDto | undefined> {
@@ -101,12 +109,25 @@ export class VideoService {
           job.videoId = keeper.id;
         }
       }
-      await rm(video.storedPath, removeOptions);
+      if (this.storage) await this.storage.removeFile("uploads", video.storedPath);
+      else await rm(video.storedPath, { force: true, maxRetries: 5, retryDelay: 150 });
       this.videos.delete(video.id);
     }
   }
 
-  async createRecordFromFile(
+  private sourceDescriptor(video: VideoEntity): StreamDescriptor {
+    const descriptor: StreamDescriptor = {
+      filePath: video.storedPath,
+      fileName: video.originalName
+    };
+    if (this.storage) {
+      descriptor.area = "uploads";
+      descriptor.open = () => this.storage!.openFile("uploads", video.storedPath);
+    }
+    return descriptor;
+  }
+
+  private async createRecordFromFile(
     filePath: string,
     originalName: string,
     uploadedAt = new Date().toISOString()
@@ -114,7 +135,7 @@ export class VideoService {
     const sourceHash = await this.persistence.fileHash(filePath);
     const existing = this.videos.findBySourceHash(sourceHash);
     if (existing) {
-      await rm(filePath, removeOptions);
+      await rm(filePath, { force: true, maxRetries: 5, retryDelay: 150 });
       return existing;
     }
 

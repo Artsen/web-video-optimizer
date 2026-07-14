@@ -1,5 +1,4 @@
-import type multer from "multer";
-import type { Express } from "express";
+import type { Express, RequestHandler } from "express";
 import type { ApiConfig } from "../config.js";
 import type { ApiRuntime } from "../runtime/api-runtime.js";
 import { createCapabilityRouter } from "./capability-routes.js";
@@ -14,7 +13,7 @@ import { createVideoRouter } from "./video-routes.js";
 export type RouteDependencies = {
   config: Pick<ApiConfig, "jsonBodyLimitBytes">;
   runtime: ApiRuntime;
-  upload: multer.Multer;
+  upload: RequestHandler;
 };
 
 export function registerRoutes(app: Express, dependencies: RouteDependencies): void {

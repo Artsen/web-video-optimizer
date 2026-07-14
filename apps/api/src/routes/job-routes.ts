@@ -127,25 +127,31 @@ export function createJobRouter(runtime: ApiRuntime): Router {
     req.on("close", () => clearInterval(interval));
   });
 
-  router.get("/api/jobs/:id/download", (req, res) => {
-    const params = parseParams(IdParamsSchema, req);
-    const descriptor = runtime.getJobDownload(params.id);
-    if (!descriptor) {
-      res.status(404).json({ error: "Output not available" });
-      return;
-    }
-    res.download(descriptor.filePath, descriptor.fileName);
-  });
+  router.get(
+    "/api/jobs/:id/download",
+    asyncHandler(async (req, res) => {
+      const params = parseParams(IdParamsSchema, req);
+      const descriptor = runtime.getJobDownload(params.id);
+      if (!descriptor) {
+        res.status(404).json({ error: "Output not available" });
+        return;
+      }
+      await streamFile(req, res, descriptor, "attachment");
+    })
+  );
 
-  router.get("/api/jobs/:id/sidecar", (req, res) => {
-    const params = parseParams(IdParamsSchema, req);
-    const descriptor = runtime.getJobSidecar(params.id);
-    if (!descriptor) {
-      res.status(404).json({ error: "Sidecar output not available" });
-      return;
-    }
-    res.download(descriptor.filePath, descriptor.fileName);
-  });
+  router.get(
+    "/api/jobs/:id/sidecar",
+    asyncHandler(async (req, res) => {
+      const params = parseParams(IdParamsSchema, req);
+      const descriptor = runtime.getJobSidecar(params.id);
+      if (!descriptor) {
+        res.status(404).json({ error: "Sidecar output not available" });
+        return;
+      }
+      await streamFile(req, res, descriptor, "attachment");
+    })
+  );
 
   router.post(
     "/api/jobs/:id/reveal",

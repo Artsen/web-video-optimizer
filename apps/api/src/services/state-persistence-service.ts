@@ -7,6 +7,7 @@ import type { ManifestSnapshot } from "../entities/manifest.js";
 import type { VideoEntity } from "../entities/video-entity.js";
 import type { ManifestSource, ManifestStore } from "../persistence/manifest-store.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
+import type { StorageBoundary } from "../storage/storage-boundary.js";
 
 export type RecoveryReport = {
   manifestSource: "none" | ManifestSource;
@@ -34,7 +35,7 @@ export class ManifestStatePersistenceService implements StatePersistenceService 
     private readonly videos: VideoRepository,
     private readonly jobs: JobRepository,
     private readonly manifestStore: ManifestStore,
-    private readonly options: { tmpDir?: string } = {}
+    private readonly options: { tmpDir?: string; storage?: StorageBoundary } = {}
   ) {}
 
   async fileHash(filePath: string): Promise<string> {
@@ -81,7 +82,8 @@ export class ManifestStatePersistenceService implements StatePersistenceService 
 
     const restoredVideoIds = new Set<string>();
     for (const video of result.snapshot.videos) {
-      if (!fs.existsSync(video.storedPath)) continue;
+      await this.validateVideoPath(video);
+      if (!(await this.fileExists("uploads", video.storedPath))) continue;
       const restored: VideoEntity = {
         ...video,
         sourceHash: video.sourceHash ?? (await this.fileHash(video.storedPath))
@@ -99,6 +101,7 @@ export class ManifestStatePersistenceService implements StatePersistenceService 
       }
 
       const restored = { ...job };
+      await this.validateJobPaths(restored);
       if (restored.status === "queued" || restored.status === "running") {
         restored.status = "canceled";
         restored.progress = 0;
@@ -133,6 +136,35 @@ export class ManifestStatePersistenceService implements StatePersistenceService 
 
   private hasRequiredOutput(job: JobEntity): boolean {
     return Boolean(job.outputPath && fs.existsSync(job.outputPath));
+  }
+
+  private async validateVideoPath(video: VideoEntity): Promise<void> {
+    if (this.options.storage)
+      await this.options.storage.assertExistingRegularFile("uploads", video.storedPath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      });
+  }
+
+  private async validateJobPaths(job: JobEntity): Promise<void> {
+    if (!this.options.storage) return;
+    if (job.outputPath) {
+      await this.options.storage.assertExistingRegularFile("outputs", job.outputPath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      });
+    }
+    if (job.sidecarPath) {
+      await this.options.storage.assertExistingRegularFile("outputs", job.sidecarPath).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+        throw error;
+      });
+    }
+  }
+
+  private async fileExists(area: "uploads" | "outputs", filePath: string): Promise<boolean> {
+    if (this.options.storage) return this.options.storage.fileExists(area, filePath);
+    return fs.existsSync(filePath);
   }
 
   private async removeJobArtifacts(job: JobEntity): Promise<number> {

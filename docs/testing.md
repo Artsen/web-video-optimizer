@@ -215,10 +215,42 @@ The real-media integration suite is expected to remain compatible with the safer
 host settings in the compiled API harness. Most request-validation coverage belongs in fast Supertest route tests rather
 than real-media scenarios.
 
+Phase 6B upload and storage hardening adds focused fast coverage for:
+
+- Multer 2 route-scoped upload parsing, including valid file handling through `POST /api/videos`, missing file behavior,
+  wrong or unexpected fields, multiple files, extra text fields, oversized files, malformed multipart requests, and
+  parser-error cleanup of staged candidates.
+- Filename admission for normal browser filenames plus traversal, Windows drive-qualified paths, UNC paths, path
+  separators, `.`/`..`, control characters, CR/LF, NUL, whitespace-only values, and UTF-8 byte limits.
+- Bounded content-signature inspection for supported container families and rejection of unknown or spoofed content such
+  as text, HTML, PDF, ZIP, executable, image, and truncated signatures. Signature tests prove extension and MIME claims
+  are not trusted; FFprobe remains authoritative for real media validation.
+- Media admission for valid staged video, duplicate cleanup, unsupported bytes, empty and oversized files, audio-only or
+  attached-picture-only probe results, invalid dimensions/duration, probe failure, move/persistence rollback, and URL
+  imports reusing the same admission path.
+- Storage-boundary behavior for lexical containment, sibling-prefix escapes, external paths, existing regular files,
+  directory rejection, symlink rejection, safe moves/removals, pruning with contained keep paths, pruning aborts, and
+  missing contained keep paths during restart recovery.
+- Manifest-integrity behavior for valid contained paths, missing contained paths, external path rejection, symlink path
+  rejection, no pruning after integrity failure, no manifest rewrite after integrity failure, and preservation of
+  external sentinel files.
+- Streaming behavior for full responses, prefix/suffix ranges, `416`, inline/attachment descriptors, missing files,
+  external/symlink rejection through storage descriptors, handle closure on success, abort, and stream error, and no
+  double close.
+
+The real symlink storage-boundary unit test is platform-conditional:
+
+- On Ubuntu CI, `it.runIf(process.platform !== "win32")` executes the real symlink-backed file rejection test.
+- On Windows developer shells, the real symlink case is skipped because unprivileged symlink creation is not reliably
+  available. Deterministic lexical, external-path, missing-file, pruning, and manifest-integrity tests still run on
+  Windows.
+- Security requirements are not represented only by the skipped test; non-symlink containment and manifest safety checks
+  run cross-platform.
+
 ## Not Covered Yet
 
 - Browser rendering behavior
-- Automated real-media queue smoke tests
 - Subtitle generation through whisper.cpp
 - YouTube importing through yt-dlp
-- Real-media corruption recovery in CI
+- Live-network YouTube importing through yt-dlp
+- Browser-driven upload/download smoke automation

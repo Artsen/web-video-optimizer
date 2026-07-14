@@ -9,6 +9,7 @@ import type { VideoEntity } from "../entities/video-entity.js";
 import type { FileRevealer } from "../infrastructure/desktop/file-revealer.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { StreamDescriptor } from "../runtime/api-runtime.js";
+import type { StorageBoundary } from "../storage/storage-boundary.js";
 import type { JobScheduler } from "../scheduling/job-scheduler.js";
 import type { CleanupService } from "./cleanup-service.js";
 import type { JobExecutor } from "./job-execution-service.js";
@@ -27,7 +28,8 @@ export class JobService {
     private readonly execution: JobExecutor,
     private readonly fileRevealer: FileRevealer,
     private readonly scheduler: JobScheduler,
-    private readonly lifecycle: JobLifecycle
+    private readonly lifecycle: JobLifecycle,
+    private readonly storage?: StorageBoundary
   ) {}
 
   get(id: string): JobDto | undefined {
@@ -187,13 +189,15 @@ export class JobService {
   getSidecar(id: string): StreamDescriptor | undefined {
     const job = this.jobs.get(id);
     return job?.status === "completed" && job.sidecarPath && job.sidecarFileName
-      ? { filePath: job.sidecarPath, fileName: job.sidecarFileName }
+      ? this.outputDescriptor(job.sidecarPath, job.sidecarFileName)
       : undefined;
   }
 
   async reveal(id: string): Promise<boolean> {
     const job = this.jobs.get(id);
-    if (!job || job.status !== "completed" || !job.outputPath || !fs.existsSync(job.outputPath)) return false;
+    if (!job || job.status !== "completed" || !job.outputPath) return false;
+    if (this.storage && !(await this.storage.fileExists("outputs", job.outputPath))) return false;
+    if (!this.storage && !fs.existsSync(job.outputPath)) return false;
     await this.fileRevealer.reveal(job.outputPath);
     return true;
   }
@@ -239,8 +243,20 @@ export class JobService {
   private completedOutput(id: string): StreamDescriptor | undefined {
     const job = this.jobs.get(id);
     return job?.status === "completed" && job.outputPath && job.outputFileName
-      ? { filePath: job.outputPath, fileName: job.outputFileName }
+      ? this.outputDescriptor(job.outputPath, job.outputFileName)
       : undefined;
+  }
+
+  private outputDescriptor(filePath: string, fileName: string): StreamDescriptor {
+    const descriptor: StreamDescriptor = {
+      filePath,
+      fileName
+    };
+    if (this.storage) {
+      descriptor.area = "outputs";
+      descriptor.open = () => this.storage!.openFile("outputs", filePath);
+    }
+    return descriptor;
   }
 
   private reusableJob(

@@ -150,6 +150,37 @@ $env:JSON_BODY_LIMIT_BYTES="5242880"
 This limit applies to JSON settings, captions, and package metadata requests. Video upload size limits are separate and
 remain controlled by the upload middleware.
 
+Video uploads default to a separate 2 GiB limit:
+
+```powershell
+$env:UPLOAD_FILE_SIZE_LIMIT_BYTES="2147483648"
+```
+
+The upload limit accepts positive integer byte values only. It is separate from `JSON_BODY_LIMIT_BYTES` and
+`MAX_CAPTURED_PROCESS_OUTPUT_BYTES`.
+
+## Upload Admission And Storage Safety
+
+The API uses Multer 2 with route-scoped disk staging for `POST /api/videos`. Browser upload behavior is unchanged: the
+multipart field name remains `video`, file-picker and drag-and-drop uploads still send a normal multipart request, and
+valid MP4/WebM-style media still appears in the app after analysis.
+
+Uploaded bytes first land in `<STORAGE_ROOT>/tmp/upload-staging` with an internally generated staging filename. Client
+filenames, extensions, and MIME types are treated as untrusted display metadata; they are not used as staging paths and
+are not enough to admit media. Admission checks include a safe original filename, bounded content-signature inspection,
+and FFprobe validation that the file is genuine temporal video with finite positive dimensions and duration. Audio-only
+files, corrupt files, unsupported files, and fake files renamed to `.mp4` are rejected. Valid media can still be accepted
+when the browser or client sends it as `application/octet-stream`.
+
+Rejected candidates are removed from staging. Duplicate uploads are cleaned up and reuse the existing source record
+rather than creating another permanent file. Accepted sources are moved into the managed `uploads` area with an internal
+ID and canonical extension.
+
+Storage paths are contained within managed directories under `STORAGE_ROOT`. The API validates managed roots, rejects
+symlink-backed media, and validates persisted source/output/sidecar paths before restoration, streaming, cleanup, or
+deletion. Public responses continue to omit filesystem paths, hashes, staging paths, canonical paths, and storage-area
+details.
+
 On Windows PowerShell, if script execution blocks `npm`, use `npm.cmd` instead:
 
 ```powershell
@@ -215,7 +246,7 @@ and unexpected internal errors. Unknown internal errors are logged server-side a
 
 ## Privacy Notes
 
-This project is designed for local use. It does not require accounts, cloud storage, external APIs, or remote video processing. Uploaded files are stored only in the local API storage directory or Docker volume until cleaned up. A local `manifest.json` tracks history so files and completed jobs can be restored after the API restarts.
+This project is designed for local use. It does not require accounts, cloud storage, external APIs, or remote video processing. Uploaded files are staged and admitted only inside the local API storage directory or Docker volume until cleaned up. A local `manifest.json` tracks history so files and completed jobs can be restored after the API restarts.
 
 ## Optional YouTube Imports
 
@@ -233,7 +264,8 @@ $env:YT_DLP_JS_RUNTIME="node:C:\Program Files\nodejs\node.exe"
 npm.cmd run dev:api
 ```
 
-The app downloads the video locally, analyzes it with FFprobe, and then treats it like a normal uploaded file.
+The app downloads the video locally, sends the downloaded file through the same admission path as a browser upload,
+analyzes it with FFprobe, and then treats it like a normal uploaded file.
 
 Longer videos may take a minute before they appear in the app. If import fails, the error shown in the UI comes from `yt-dlp`; some videos may require browser cookies, sign-in, or may not be downloadable by `yt-dlp`.
 
