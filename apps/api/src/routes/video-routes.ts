@@ -1,7 +1,10 @@
 import type multer from "multer";
 import { Router } from "express";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { requireJsonBody } from "../middleware/require-json.js";
 import type { ApiRuntime } from "../runtime/api-runtime.js";
+import { IdParamsSchema, RenameVideoBodySchema } from "../validation/api-schemas.js";
+import { parseParams, parseRequest } from "../validation/request-validation.js";
 import { streamFile } from "./stream-file.js";
 
 export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): Router {
@@ -29,7 +32,8 @@ export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): R
   router.get(
     "/api/videos/:id/source",
     asyncHandler(async (req, res) => {
-      const descriptor = runtime.getVideoSource(req.params.id);
+      const params = parseParams(IdParamsSchema, req);
+      const descriptor = runtime.getVideoSource(params.id);
       if (!descriptor) {
         res.status(404).json({ error: "Video not found" });
         return;
@@ -39,7 +43,8 @@ export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): R
   );
 
   router.get("/api/videos/:id/download", (req, res) => {
-    const descriptor = runtime.getVideoDownload(req.params.id);
+    const params = parseParams(IdParamsSchema, req);
+    const descriptor = runtime.getVideoDownload(params.id);
     if (!descriptor) {
       res.status(404).json({ error: "Source video not found" });
       return;
@@ -49,14 +54,11 @@ export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): R
 
   router.patch(
     "/api/videos/:id",
+    requireJsonBody,
     asyncHandler(async (req, res) => {
-      const nextName = String(req.body?.originalName ?? "").trim();
-      if (!nextName) {
-        res.status(400).json({ error: "Enter a source filename." });
-        return;
-      }
+      const { params, body } = parseRequest({ params: IdParamsSchema, body: RenameVideoBodySchema }, req);
 
-      const record = await runtime.renameVideo(req.params.id, nextName);
+      const record = await runtime.renameVideo(params.id, body.originalName);
       if (!record) {
         res.status(404).json({ error: "Video not found" });
         return;
@@ -68,7 +70,8 @@ export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): R
   router.delete(
     "/api/videos/:id",
     asyncHandler(async (req, res) => {
-      if (!(await runtime.deleteVideo(req.params.id))) {
+      const params = parseParams(IdParamsSchema, req);
+      if (!(await runtime.deleteVideo(params.id))) {
         res.status(404).json({ error: "Video not found" });
         return;
       }

@@ -12,9 +12,11 @@ describe("parseApiConfig", () => {
     const config = parseApiConfig({}, options);
 
     expect(config).toMatchObject({
-      host: "0.0.0.0",
+      host: "127.0.0.1",
       port: 4000,
-      corsOrigin: true,
+      allowLanAccess: false,
+      corsOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"],
+      jsonBodyLimitBytes: 5242880,
       uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
       maxConcurrentMediaJobs: 1,
       shutdownGracePeriodMs: 15000,
@@ -26,11 +28,48 @@ describe("parseApiConfig", () => {
     });
   });
 
-  it("accepts an explicit host and port", () => {
+  it("accepts an explicit loopback host and port", () => {
     expect(parseApiConfig({ HOST: "127.0.0.1", PORT: "4100" }, options)).toMatchObject({
       host: "127.0.0.1",
       port: 4100
     });
+    expect(parseApiConfig({ HOST: "localhost" }, options).host).toBe("localhost");
+    expect(parseApiConfig({ HOST: "::1" }, options).host).toBe("::1");
+  });
+
+  it("requires LAN opt-in for wildcard and non-loopback hosts", () => {
+    expect(() => parseApiConfig({ HOST: "0.0.0.0" }, options)).toThrow(
+      "HOST requires ALLOW_LAN_ACCESS=true when binding outside loopback: 0.0.0.0"
+    );
+    expect(() => parseApiConfig({ HOST: "::" }, options)).toThrow(
+      "HOST requires ALLOW_LAN_ACCESS=true when binding outside loopback: ::"
+    );
+    expect(() => parseApiConfig({ HOST: "192.168.1.50" }, options)).toThrow(
+      "HOST requires ALLOW_LAN_ACCESS=true when binding outside loopback: 192.168.1.50"
+    );
+  });
+
+  it("accepts wildcard and explicit LAN hosts with opt-in", () => {
+    expect(parseApiConfig({ HOST: "0.0.0.0", ALLOW_LAN_ACCESS: "true" }, options)).toMatchObject({
+      host: "0.0.0.0",
+      allowLanAccess: true
+    });
+    expect(parseApiConfig({ HOST: "::", ALLOW_LAN_ACCESS: "TRUE" }, options)).toMatchObject({
+      host: "::",
+      allowLanAccess: true
+    });
+    expect(parseApiConfig({ HOST: "192.168.1.50", ALLOW_LAN_ACCESS: "true" }, options)).toMatchObject({
+      host: "192.168.1.50",
+      allowLanAccess: true
+    });
+  });
+
+  it("parses LAN access booleans strictly", () => {
+    expect(parseApiConfig({ ALLOW_LAN_ACCESS: "false" }, options).allowLanAccess).toBe(false);
+    expect(parseApiConfig({ ALLOW_LAN_ACCESS: "FALSE" }, options).allowLanAccess).toBe(false);
+    for (const value of ["yes", "1", "enabled", ""]) {
+      expect(() => parseApiConfig({ ALLOW_LAN_ACCESS: value }, options)).toThrow(`Invalid ALLOW_LAN_ACCESS: ${value}`);
+    }
   });
 
   it("rejects invalid ports", () => {
@@ -108,6 +147,48 @@ describe("parseApiConfig", () => {
     }
   });
 
+  it("parses CORS origins as an exact normalized allowlist", () => {
+    expect(
+      parseApiConfig(
+        {
+          CORS_ORIGIN: " http://localhost:5173 ,http://127.0.0.1:5173,http://localhost:5173,http://localhost:5173/ "
+        },
+        options
+      ).corsOrigins
+    ).toEqual(["http://localhost:5173", "http://127.0.0.1:5173"]);
+  });
+
+  it("accepts multiple HTTPS CORS origins", () => {
+    expect(
+      parseApiConfig({ CORS_ORIGIN: "https://example.com,https://video.example.com:8443" }, options).corsOrigins
+    ).toEqual(["https://example.com", "https://video.example.com:8443"]);
+  });
+
+  it("rejects invalid CORS origins", () => {
+    for (const value of [
+      "*",
+      "null",
+      "file:///tmp",
+      "javascript:alert(1)",
+      "https://user:pass@example.com",
+      "https://example.com/path",
+      "https://example.com?x=1",
+      "https://example.com#frag",
+      ""
+    ]) {
+      expect(() => parseApiConfig({ CORS_ORIGIN: value }, options)).toThrow(`Invalid CORS_ORIGIN: ${value}`);
+    }
+  });
+
+  it("accepts and validates JSON body limits", () => {
+    expect(parseApiConfig({ JSON_BODY_LIMIT_BYTES: "1024" }, options).jsonBodyLimitBytes).toBe(1024);
+    for (const value of ["0", "-1", "1.5", "many", ""]) {
+      expect(() => parseApiConfig({ JSON_BODY_LIMIT_BYTES: value }, options)).toThrow(
+        `Invalid JSON_BODY_LIMIT_BYTES: ${value}`
+      );
+    }
+  });
+
   it("derives storage paths from an explicit storage root", () => {
     const storageRoot = "D:\\video-data";
     const config = parseApiConfig({ STORAGE_ROOT: storageRoot }, options);
@@ -136,7 +217,7 @@ describe("parseApiConfig", () => {
       whisperCppModel: "D:\\ggml-base.en.bin",
       ytDlpBin: "D:\\tools\\yt-dlp.exe",
       ytDlpJsRuntime: "node:D:\\node\\node.exe",
-      corsOrigin: "http://localhost:5173"
+      corsOrigins: ["http://localhost:5173"]
     });
   });
 });

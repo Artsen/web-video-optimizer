@@ -84,6 +84,9 @@ Run the API:
 npm run dev:api
 ```
 
+By default, the API binds only to `127.0.0.1` and allows browser requests only from
+`http://localhost:5173` and `http://127.0.0.1:5173`. CORS origins are exact; wildcard origins are not enabled.
+
 By default, the API runs one process-backed media job at a time. This keeps local CPU usage predictable for encodes,
 poster generation, subtitle generation, and muxing. To allow more concurrent media jobs, set:
 
@@ -119,13 +122,33 @@ Run the web app in another terminal:
 npm run dev:web
 ```
 
-For access from another computer on your local network, open the web app with the host machine's LAN IP, for example:
+For access from another computer on your local network, explicitly opt in before starting the API:
+
+```powershell
+$env:ALLOW_LAN_ACCESS="true"
+$env:HOST="0.0.0.0"
+$env:CORS_ORIGIN="http://192.168.1.25:5173"
+npm.cmd run dev:api
+```
+
+Then open the web app with the host machine's LAN IP, for example:
 
 ```text
 http://192.168.1.25:5173
 ```
 
-The frontend automatically calls the API at the same LAN host on port `4000`, for example `http://192.168.1.25:4000`. If Windows prompts for firewall access, allow Node.js for private networks.
+The frontend automatically calls the API at the same LAN host on port `4000`, for example `http://192.168.1.25:4000`.
+LAN mode assumes a trusted private network and does not add authentication. If Windows prompts for firewall access,
+allow Node.js for private networks.
+
+JSON request bodies default to a 5 MiB limit:
+
+```powershell
+$env:JSON_BODY_LIMIT_BYTES="5242880"
+```
+
+This limit applies to JSON settings, captions, and package metadata requests. Video upload size limits are separate and
+remain controlled by the upload middleware.
 
 On Windows PowerShell, if script execution blocks `npm`, use `npm.cmd` instead:
 
@@ -184,6 +207,11 @@ docs/
 - `GET /api/history` returns current session files and jobs
 - `POST /api/history/delete` deletes selected files/jobs
 - `DELETE /api/videos/:id` removes temporary files for a video
+
+Mutable JSON endpoints require `Content-Type: application/json`, reject unknown fields, and return stable JSON error
+codes for validation, invalid JSON, oversized JSON, unsupported media types, denied CORS origins, unknown API routes,
+and unexpected internal errors. Unknown internal errors are logged server-side and returned to clients as
+`Unexpected server error` without filesystem paths or process details.
 
 ## Privacy Notes
 
