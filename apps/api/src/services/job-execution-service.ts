@@ -83,7 +83,6 @@ export class JobExecutionService implements JobExecutor {
       onClose: async (code) => {
         if (job.status === "canceled") {
           job.progress = 0;
-          job.message = "Canceled";
           await this.persistence.save();
           return;
         }
@@ -147,7 +146,6 @@ export class JobExecutionService implements JobExecutor {
       },
       onClose: async (code) => {
         if (job.status === "canceled") {
-          job.message = "Canceled";
           await this.persistence.save();
           return;
         }
@@ -209,7 +207,6 @@ export class JobExecutionService implements JobExecutor {
       onClose: async (code) => {
         if (job.status === "canceled") {
           job.progress = 0;
-          job.message = "Canceled";
           await this.persistence.save();
           return;
         }

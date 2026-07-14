@@ -493,9 +493,10 @@ describe("JobExecutionService", () => {
     const canceled = job(root, { id: "canceled", status: "queued" });
     service.runEncode(canceled, source.storedPath);
     canceled.status = "canceled";
+    canceled.message = "Canceled by API shutdown";
     runner.latest().emitClose(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(canceled).toMatchObject({ progress: 0, message: "Canceled" });
+    expect(canceled).toMatchObject({ progress: 0, message: "Canceled by API shutdown" });
 
     const poster = job(root, {
       id: "poster",

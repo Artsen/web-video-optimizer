@@ -269,7 +269,6 @@ export class CaptionService {
     }
     if (job.status === "canceled" || !this.jobs.get(job.id)) {
       job.progress = 0;
-      job.message = "Canceled";
       job.completedAt = new Date().toISOString();
       await this.persistence.save();
       return;
@@ -334,7 +333,6 @@ export class CaptionService {
           void settle(async () => {
             if (job.status === "canceled") {
               job.progress = 0;
-              job.message = "Canceled";
               await fs.promises.rm(audioPath, { force: true });
               await this.persistence.save();
               return;
@@ -353,7 +351,6 @@ export class CaptionService {
         if (job.status === "canceled") {
           void settle(async () => {
             job.progress = 0;
-            job.message = "Canceled";
             await fs.promises.rm(audioPath, { force: true });
             await this.persistence.save();
           });
@@ -389,7 +386,6 @@ export class CaptionService {
             if (whisperResult.kind === "timeout") {
               if (job.status === "canceled") {
                 job.progress = 0;
-                job.message = "Canceled";
                 await this.persistence.save();
                 return;
               }
@@ -408,7 +404,6 @@ export class CaptionService {
             }
             if (job.status === "canceled") {
               job.progress = 0;
-              job.message = "Canceled";
               await this.persistence.save();
               return;
             }
