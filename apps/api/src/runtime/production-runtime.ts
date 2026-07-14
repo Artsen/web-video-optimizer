@@ -7,6 +7,7 @@ import { DesktopFileRevealer } from "../infrastructure/desktop/file-revealer.js"
 import type { FileRevealer } from "../infrastructure/desktop/file-revealer.js";
 import { InMemoryProcessRegistry } from "../infrastructure/processes/in-memory-process-registry.js";
 import { NodeProcessRunner } from "../infrastructure/processes/node-process-runner.js";
+import type { ProcessExecutionPolicy } from "../infrastructure/processes/process-execution-policy.js";
 import type { ProcessRegistry } from "../infrastructure/processes/process-registry.js";
 import type { ProcessRunner } from "../infrastructure/processes/process-runner.js";
 import { createCommandRunner } from "../infrastructure/tools/command-runner.js";
@@ -63,16 +64,27 @@ export function createProductionRuntime(
   dependencies: ProductionRuntimeDependencies = {}
 ): ProductionRuntime {
   const processRunner = dependencies.processRunner ?? new NodeProcessRunner();
-  const commandRunner = dependencies.commandRunner ?? createCommandRunner(processRunner);
+  const mediaPolicy: ProcessExecutionPolicy = {
+    timeoutMs: apiConfig.mediaProcessTimeoutMs,
+    terminationGracePeriodMs: apiConfig.processKillGracePeriodMs,
+    maxCapturedOutputBytes: apiConfig.maxCapturedProcessOutputBytes
+  };
+  const toolPolicy: ProcessExecutionPolicy = {
+    timeoutMs: apiConfig.toolCommandTimeoutMs,
+    terminationGracePeriodMs: apiConfig.processKillGracePeriodMs,
+    maxCapturedOutputBytes: apiConfig.maxCapturedProcessOutputBytes
+  };
+  const commandRunner = dependencies.commandRunner ?? createCommandRunner(processRunner, toolPolicy);
   const videoRepository = dependencies.videoRepository ?? new InMemoryVideoRepository();
   const jobRepository = dependencies.jobRepository ?? new InMemoryJobRepository();
   const manifestStore = dependencies.manifestStore ?? new FileManifestStore(apiConfig.manifestPath);
   const processRegistry = dependencies.processRegistry ?? new InMemoryProcessRegistry();
   const mediaProbe = dependencies.mediaProbe ?? new FfprobeAdapter(commandRunner);
   const ffmpegCapabilitiesAdapter =
-    dependencies.ffmpegCapabilitiesAdapter ?? new ProcessFfmpegCapabilitiesAdapter(processRunner);
+    dependencies.ffmpegCapabilitiesAdapter ?? new ProcessFfmpegCapabilitiesAdapter(commandRunner);
   const whisperAdapter = dependencies.whisperAdapter ?? new ConfigWhisperAdapter(apiConfig, commandRunner);
-  const videoDownloader = dependencies.videoDownloader ?? new YtDlpAdapter(apiConfig, commandRunner, processRunner);
+  const videoDownloader =
+    dependencies.videoDownloader ?? new YtDlpAdapter(apiConfig, commandRunner, processRunner, mediaPolicy);
   const fileRevealer = dependencies.fileRevealer ?? new DesktopFileRevealer(processRunner);
   const jobScheduler = dependencies.jobScheduler ?? new InMemoryJobScheduler(apiConfig.maxConcurrentMediaJobs);
   const jobLifecycle = new JobLifecycleService();
@@ -110,7 +122,8 @@ export function createProductionRuntime(
     jobRepository,
     statePersistence,
     cleanupService,
-    jobLifecycle
+    jobLifecycle,
+    mediaPolicy
   );
   const jobService = new JobService(
     videoRepository,
@@ -137,7 +150,8 @@ export function createProductionRuntime(
     apiConfig.tmpDir,
     apiConfig.whisperCppModel,
     jobScheduler,
-    jobLifecycle
+    jobLifecycle,
+    mediaPolicy
   );
   const packageService = new PackageService(
     videoRepository,

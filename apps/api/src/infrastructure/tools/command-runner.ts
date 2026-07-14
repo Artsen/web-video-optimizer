@@ -1,4 +1,7 @@
+import { BoundedTextBuffer } from "../processes/bounded-text-buffer.js";
+import type { ProcessExecutionPolicy } from "../processes/process-execution-policy.js";
 import type { ProcessRunner } from "../processes/process-runner.js";
+import { ProcessOutputLimitError, superviseProcess } from "../processes/process-supervisor.js";
 
 export type CommandRunner = {
   run(command: string, args: string[]): Promise<{ stdout: string; stderr: string; code: number | null }>;
@@ -6,25 +9,30 @@ export type CommandRunner = {
   commandExists(command: string, args?: string[]): Promise<boolean>;
 };
 
-export function createCommandRunner(processRunner: ProcessRunner): CommandRunner {
+export function createCommandRunner(processRunner: ProcessRunner, policy: ProcessExecutionPolicy): CommandRunner {
   async function run(
     command: string,
     args: string[]
   ): Promise<{ stdout: string; stderr: string; code: number | null }> {
-    return new Promise((resolve, reject) => {
-      const child = processRunner["spawn"](command, args, { windowsHide: true });
-      let stdout = "";
-      let stderr = "";
+    const child = processRunner.spawn(command, args, { windowsHide: true });
+    const stdout = new BoundedTextBuffer(policy.maxCapturedOutputBytes, "full");
+    const stderr = new BoundedTextBuffer(policy.maxCapturedOutputBytes, "tail");
+    const supervisor = superviseProcess(child, command, policy);
 
-      child.stdout?.on("data", (chunk) => {
-        stdout += String(chunk);
-      });
-      child.stderr?.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      child.on("error", reject);
-      child.on("close", (code) => resolve({ stdout, stderr, code }));
+    child.stdout?.on("data", (chunk) => {
+      stdout.append(chunk);
+      if (stdout.overflowed) {
+        supervisor.fail(new ProcessOutputLimitError(policy.maxCapturedOutputBytes));
+      }
     });
+    child.stderr?.on("data", (chunk) => {
+      stderr.append(chunk);
+    });
+
+    const result = await supervisor.promise;
+    if (result.kind === "error") throw result.error;
+    if (result.kind === "timeout") throw result.error;
+    return { stdout: stdout.toString(), stderr: stderr.toString(), code: result.code };
   }
 
   return {
@@ -37,11 +45,14 @@ export function createCommandRunner(processRunner: ProcessRunner): CommandRunner
       return JSON.parse(result.stdout);
     },
     async commandExists(command: string, args = ["--help"]): Promise<boolean> {
-      return new Promise((resolve) => {
-        const child = processRunner["spawn"](command, args, { windowsHide: true });
-        child.on("error", () => resolve(false));
-        child.on("close", () => resolve(true));
-      });
+      try {
+        const child = processRunner.spawn(command, args, { windowsHide: true });
+        const supervisor = superviseProcess(child, command, policy);
+        const result = await supervisor.promise;
+        return result.kind === "close";
+      } catch {
+        return false;
+      }
     }
   };
 }

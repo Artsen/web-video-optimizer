@@ -82,6 +82,15 @@ Run the full repository check:
 npm run check
 ```
 
+Run the compiled API real-media integration suite:
+
+```bash
+npm run test:integration:media
+```
+
+This command builds the packages, API, and web app first, then starts the compiled API on isolated local ports with
+temporary `STORAGE_ROOT` directories. It requires `ffmpeg` and `ffprobe` on `PATH`.
+
 ## Current Test Scope
 
 The initial unit tests cover pure behavior extracted from the current API and web entry files:
@@ -148,9 +157,9 @@ The initial unit tests cover pure behavior extracted from the current API and we
   coalescing, idle/all connection close hooks, runtime shutdown awaiting, and failure exit-code reporting without
   binding real ports
 
-The tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
-argument arrays only; they do not execute FFmpeg. Those tools are still required for the running application and for
-future real-media integration tests.
+Fast unit tests intentionally avoid spawning FFmpeg, FFprobe, whisper.cpp, or yt-dlp. FFmpeg argument tests assert exact
+argument arrays only; they do not execute FFmpeg. The separate real-media integration suite does execute FFmpeg and
+FFprobe through the compiled API.
 
 Fast process-backed unit tests use `apps/api/src/infrastructure/processes/test/fake-process-runner.ts`. The fake captures
 command names, argument arrays, spawn options, stdout/stderr chunks, close events, error events, `kill`, and `unref`
@@ -176,20 +185,26 @@ primary/backup load results, validation, atomic same-directory replacement, and 
 service tests cover policy such as startup normalization, restoring only eligible records, flushing before
 initialization resolves, and keeping public DTOs free of private paths and hashes.
 
-Real-media graceful-shutdown, crash-recovery, and corruption-recovery smoke tests should use isolated `STORAGE_ROOT`
-directories. They should verify that manifests parse immediately without arbitrary persistence sleeps, interrupted
-jobs are retained as canceled history, no queued job resumes, source videos remain, partial outputs are removed, valid
-backups repair corrupt primaries, and corrupt primary plus corrupt backup fails startup without pruning uploads or
-outputs.
+Real-media graceful-shutdown and crash-recovery integration tests use isolated `STORAGE_ROOT` directories. They verify
+that manifests parse immediately, interrupted jobs are retained as canceled history, no queued job resumes, source
+videos remain, and partial outputs are removed. On Windows, child-process signal termination is treated as restart
+recovery; on POSIX CI, `SIGTERM` exercises the graceful shutdown path.
+
+The real-media integration suite currently covers:
+
+- Production health and capability routes through the compiled server
+- Multipart upload, duplicate detection, metadata inspection, and rename
+- MP4 H.264 encode, download, FFprobe validation, and byte-range output streaming
+- WebM VP9 encode and suffix byte-range streaming for browser playback regression coverage
+- Poster generation as WebP
+- Website package ZIP creation and privacy checks
+- Media-process timeout containment, partial-output cleanup, and later work acceptance
+- API restart recovery for running and queued jobs
 
 ## Not Covered Yet
 
-- Full production-runtime route integration
-- Real multipart upload storage through the production HTTP server
-- Real FFmpeg process execution
-- Automated real-media queue smoke tests
 - Browser rendering behavior
-- End-to-end package ZIP validation with real media
+- Automated real-media queue smoke tests
 - Subtitle generation through whisper.cpp
 - YouTube importing through yt-dlp
-- Automated real-media graceful-shutdown and crash-recovery coverage in CI
+- Real-media corruption recovery in CI

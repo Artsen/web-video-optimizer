@@ -49,6 +49,10 @@ function config(storageRoot: string): ApiConfig {
     uploadFileSizeLimitBytes: 1234,
     maxConcurrentMediaJobs: 1,
     shutdownGracePeriodMs: 15000,
+    mediaProcessTimeoutMs: 1_800_000,
+    toolCommandTimeoutMs: 60_000,
+    processKillGracePeriodMs: 5_000,
+    maxCapturedProcessOutputBytes: 4 * 1024 * 1024,
     ytDlpJsRuntime: "node:test"
   };
 }

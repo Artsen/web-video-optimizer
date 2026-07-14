@@ -35,6 +35,14 @@ export default tseslint.config(
       globals: {
         ...globals.node
       }
+    },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: ["./integration/**", "../integration/**", "../../integration/**"]
+        }
+      ]
     }
   },
   {

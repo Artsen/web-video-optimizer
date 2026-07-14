@@ -4,9 +4,11 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    exclude: ["src/integration/**/*.integration.test.ts"],
     coverage: {
       reporter: ["text", "lcov"],
-      reportsDirectory: "../../coverage/api"
+      reportsDirectory: "../../coverage/api",
+      exclude: ["dist/**", "src/integration/**", "src/**/*.test.ts", "vitest.config.ts", "vitest.integration.config.ts"]
     }
   }
 });

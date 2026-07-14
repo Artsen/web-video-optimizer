@@ -12,8 +12,11 @@ import {
 } from "@local-video-optimizer/video-core";
 import type { JobEntity } from "../entities/job-entity.js";
 import type { VideoEntity } from "../entities/video-entity.js";
+import type { ProcessExecutionPolicy } from "../infrastructure/processes/process-execution-policy.js";
 import type { ProcessRegistry } from "../infrastructure/processes/process-registry.js";
 import type { ProcessRunner } from "../infrastructure/processes/process-runner.js";
+import { BoundedTextBuffer } from "../infrastructure/processes/bounded-text-buffer.js";
+import { superviseProcess } from "../infrastructure/processes/process-supervisor.js";
 import type { WhisperAdapter } from "../infrastructure/tools/whisper-adapter.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { CaptionPayload } from "../runtime/api-runtime.js";
@@ -40,7 +43,8 @@ export class CaptionService {
     private readonly tmpDir: string,
     private readonly whisperModel: string | undefined,
     private readonly scheduler: JobScheduler,
-    private readonly lifecycle: JobLifecycle
+    private readonly lifecycle: JobLifecycle,
+    private readonly mediaPolicy: ProcessExecutionPolicy
   ) {}
 
   createSubtitleJob(videoId: string): { status: 200 | 202 | 400 | 404; job?: JobDto; error?: string } {
@@ -123,48 +127,42 @@ export class CaptionService {
     return { status: 202, job: this.jobService.publicJob(job) };
   }
 
-  detectLeadingSilence(inputPath: string, jobId?: string): Promise<number> {
-    return new Promise((resolve) => {
-      const args = [
-        "-hide_banner",
-        "-nostats",
-        "-i",
-        inputPath,
-        "-af",
-        "silencedetect=noise=-35dB:d=0.35",
-        "-f",
-        "null",
-        "-"
-      ];
-      const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
-      if (jobId) this.processRegistry.set(jobId, child);
-      let stderr = "";
+  async detectLeadingSilence(
+    inputPath: string,
+    jobId?: string,
+    policy: ProcessExecutionPolicy = this.mediaPolicy
+  ): Promise<number> {
+    const args = [
+      "-hide_banner",
+      "-nostats",
+      "-i",
+      inputPath,
+      "-af",
+      "silencedetect=noise=-35dB:d=0.35",
+      "-f",
+      "null",
+      "-"
+    ];
+    const child = this.processRunner.spawn("ffmpeg", args, { windowsHide: true });
+    if (jobId) this.processRegistry.set(jobId, child);
+    const stderr = new BoundedTextBuffer(policy.maxCapturedOutputBytes, "tail");
+    const supervisor = superviseProcess(child, "ffmpeg", policy);
 
-      child.stderr?.on("data", (chunk) => {
-        stderr += String(chunk);
-      });
-      child.on("error", () => {
-        if (jobId) this.processRegistry.delete(jobId);
-        resolve(0);
-      });
-      child.on("close", () => {
-        if (jobId) this.processRegistry.delete(jobId);
-        const firstStart = stderr.match(/silence_start:\s*([0-9.]+)/);
-        const firstEnd = stderr.match(/silence_end:\s*([0-9.]+)/);
-        const silenceStart = firstStart ? Number(firstStart[1]) : undefined;
-        const silenceEnd = firstEnd ? Number(firstEnd[1]) : undefined;
-        if (
-          silenceStart !== undefined &&
-          silenceStart <= 0.25 &&
-          silenceEnd !== undefined &&
-          Number.isFinite(silenceEnd)
-        ) {
-          resolve(Math.max(0, Math.round(silenceEnd * 1000) / 1000));
-          return;
-        }
-        resolve(0);
-      });
-    });
+    child.stderr?.on("data", (chunk) => stderr.append(chunk));
+    const result = await supervisor.promise;
+    if (jobId) this.processRegistry.delete(jobId);
+    if (result.kind === "timeout") throw result.error;
+    if (result.kind === "error") return 0;
+
+    const text = stderr.toString();
+    const firstStart = text.match(/silence_start:\s*([0-9.]+)/);
+    const firstEnd = text.match(/silence_end:\s*([0-9.]+)/);
+    const silenceStart = firstStart ? Number(firstStart[1]) : undefined;
+    const silenceEnd = firstEnd ? Number(firstEnd[1]) : undefined;
+    if (silenceStart !== undefined && silenceStart <= 0.25 && silenceEnd !== undefined && Number.isFinite(silenceEnd)) {
+      return Math.max(0, Math.round(silenceEnd * 1000) / 1000);
+    }
+    return 0;
   }
 
   private createSubtitleEntity(video: VideoEntity): JobEntity {
@@ -230,6 +228,11 @@ export class CaptionService {
 
   private async runSubtitleJob(job: JobEntity, inputPath: string): Promise<void> {
     if (!this.lifecycle.start(job, "Checking leading silence")) return;
+    const workflowStartedAt = Date.now();
+    const remainingPolicy = (): ProcessExecutionPolicy => ({
+      ...this.mediaPolicy,
+      timeoutMs: Math.max(1, this.mediaPolicy.timeoutMs - (Date.now() - workflowStartedAt))
+    });
 
     const whisperCommand = await this.whisperAdapter.resolveCommand();
     const whisperModel = this.whisperModel;
@@ -253,7 +256,17 @@ export class CaptionService {
       return;
     }
 
-    const leadingSilenceSeconds = await this.detectLeadingSilence(inputPath, job.id);
+    let leadingSilenceSeconds = 0;
+    try {
+      leadingSilenceSeconds = await this.detectLeadingSilence(inputPath, job.id, remainingPolicy());
+    } catch {
+      if (this.lifecycle.fail(job, `Media processing timed out after ${this.mediaPolicy.timeoutMs} ms`)) {
+        await fs.promises.rm(audioPath, { force: true });
+        await this.cleanup.removeJobArtifacts(job);
+        await this.persistence.save();
+      }
+      return;
+    }
     if (job.status === "canceled" || !this.jobs.get(job.id)) {
       job.progress = 0;
       job.message = "Canceled";
@@ -299,21 +312,42 @@ export class CaptionService {
         }
       };
 
-      const extractor = this.processRunner["spawn"]("ffmpeg", extractArgs, { windowsHide: true });
+      const extractor = this.processRunner.spawn("ffmpeg", extractArgs, { windowsHide: true });
       this.processRegistry.set(job.id, extractor);
-
-      extractor.on("error", (error) => {
-        if (extractionFinished) return;
-        void settle(async () => {
-          if (this.lifecycle.fail(job, error.message)) {
-            await this.cleanup.removeJobArtifacts(job);
-            await this.persistence.save();
-          }
-        });
+      const extractorSupervisor = superviseProcess(extractor, "ffmpeg", remainingPolicy(), {
+        onForceSettle: () => console.warn(`Force-settled timed-out subtitle extraction for job ${job.id}`)
       });
 
-      extractor.on("close", (code) => {
-        if (settled) return;
+      void extractorSupervisor.promise.then((result) => {
+        if (extractionFinished) return;
+        if (result.kind === "error") {
+          const error = result.error;
+          void settle(async () => {
+            if (this.lifecycle.fail(job, error.message)) {
+              await this.cleanup.removeJobArtifacts(job);
+              await this.persistence.save();
+            }
+          });
+          return;
+        }
+        if (result.kind === "timeout") {
+          void settle(async () => {
+            if (job.status === "canceled") {
+              job.progress = 0;
+              job.message = "Canceled";
+              await fs.promises.rm(audioPath, { force: true });
+              await this.persistence.save();
+              return;
+            }
+            if (this.lifecycle.fail(job, `Media processing timed out after ${this.mediaPolicy.timeoutMs} ms`)) {
+              await fs.promises.rm(audioPath, { force: true });
+              await this.cleanup.removeJobArtifacts(job);
+              await this.persistence.save();
+            }
+          });
+          return;
+        }
+        const code = result.code;
         extractionFinished = true;
         this.processRegistry.delete(job.id);
         if (job.status === "canceled") {
@@ -336,8 +370,11 @@ export class CaptionService {
         }
 
         this.lifecycle.updateProgress(job, 35, "Transcribing speech with whisper.cpp");
-        const whisper = this.processRunner["spawn"](whisperCommand, whisperArgs, { windowsHide: true });
+        const whisper = this.processRunner.spawn(whisperCommand, whisperArgs, { windowsHide: true });
         this.processRegistry.set(job.id, whisper);
+        const whisperSupervisor = superviseProcess(whisper, whisperCommand, remainingPolicy(), {
+          onForceSettle: () => console.warn(`Force-settled timed-out Whisper process for job ${job.id}`)
+        });
 
         whisper.stderr?.on("data", (chunk) => {
           const text = String(chunk).trim();
@@ -346,25 +383,36 @@ export class CaptionService {
           }
         });
 
-        whisper.on("error", (error) => {
-          void settle(async () => {
-            if (this.lifecycle.fail(job, error.message)) {
-              await fs.promises.rm(audioPath, { force: true });
-              await this.cleanup.removeJobArtifacts(job);
-              await this.persistence.save();
-            }
-          });
-        });
-
-        whisper.on("close", (whisperCode) => {
+        void whisperSupervisor.promise.then((whisperResult) => {
           void settle(async () => {
             await fs.promises.rm(audioPath, { force: true });
+            if (whisperResult.kind === "timeout") {
+              if (job.status === "canceled") {
+                job.progress = 0;
+                job.message = "Canceled";
+                await this.persistence.save();
+                return;
+              }
+              if (this.lifecycle.fail(job, `Media processing timed out after ${this.mediaPolicy.timeoutMs} ms`)) {
+                await this.cleanup.removeJobArtifacts(job);
+                await this.persistence.save();
+              }
+              return;
+            }
+            if (whisperResult.kind === "error") {
+              if (this.lifecycle.fail(job, whisperResult.error.message)) {
+                await this.cleanup.removeJobArtifacts(job);
+                await this.persistence.save();
+              }
+              return;
+            }
             if (job.status === "canceled") {
               job.progress = 0;
               job.message = "Canceled";
               await this.persistence.save();
               return;
             }
+            const whisperCode = whisperResult.code;
             if (whisperCode !== 0) {
               if (this.lifecycle.fail(job, `whisper.cpp exited with code ${whisperCode}`)) {
                 await this.cleanup.removeJobArtifacts(job);

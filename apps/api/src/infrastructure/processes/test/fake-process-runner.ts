@@ -17,6 +17,7 @@ export class FakeRunningProcess implements RunningProcess {
   readonly stdout = new FakeProcessOutput();
   readonly stderr = new FakeProcessOutput();
   killedWith?: NodeJS.Signals;
+  readonly killSignals: Array<NodeJS.Signals | undefined> = [];
   unrefCalled = false;
   readonly #errorListeners: Array<(error: Error) => void> = [];
   readonly #closeListeners: Array<(code: number | null) => void> = [];
@@ -29,6 +30,7 @@ export class FakeRunningProcess implements RunningProcess {
 
   kill(signal?: NodeJS.Signals): boolean {
     this.killedWith = signal;
+    this.killSignals.push(signal);
     return true;
   }
 

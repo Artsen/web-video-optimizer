@@ -10,7 +10,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest",
     "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "test:integration:media": "vitest run --config vitest.integration.config.ts"
   },
   "dependencies": {
     "@local-video-optimizer/contracts": "file:../../packages/contracts",

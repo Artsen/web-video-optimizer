@@ -2,7 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { nanoid } from "nanoid";
 import type { ApiConfig } from "../../config.js";
+import { BoundedTextBuffer } from "../processes/bounded-text-buffer.js";
+import type { ProcessExecutionPolicy } from "../processes/process-execution-policy.js";
 import type { ProcessRunner } from "../processes/process-runner.js";
+import { superviseProcess } from "../processes/process-supervisor.js";
 import type { CommandRunner } from "./command-runner.js";
 
 export interface VideoDownloader {
@@ -20,7 +23,8 @@ export class YtDlpAdapter implements VideoDownloader {
   constructor(
     private readonly config: ApiConfig,
     private readonly commandRunner: CommandRunner,
-    private readonly processRunner: ProcessRunner
+    private readonly processRunner: ProcessRunner,
+    private readonly mediaPolicy: ProcessExecutionPolicy
   ) {}
 
   async resolveCommand(): Promise<string | undefined> {
@@ -52,43 +56,40 @@ export class YtDlpAdapter implements VideoDownloader {
     const outputTemplate = path.join(downloadDir, "%(title).180B-%(id)s.%(ext)s");
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const child = this.processRunner["spawn"](
-          ytDlpCommand,
-          [
-            "--no-playlist",
-            "--restrict-filenames",
-            "--windows-filenames",
-            "--newline",
-            ...this.jsRuntimeArgs(),
-            "-f",
-            "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-            "--merge-output-format",
-            "mp4",
-            "-o",
-            outputTemplate,
-            url
-          ],
-          { windowsHide: true }
-        );
-        let stdout = "";
-        let stderr = "";
-        child.stdout?.on("data", (chunk) => {
-          stdout += String(chunk);
-        });
-        child.stderr?.on("data", (chunk) => {
-          stderr += String(chunk);
-        });
-        child.on("error", reject);
-        child.on("close", (code) => {
-          if (code === 0) {
-            resolve();
-            return;
-          }
-          const detail = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n").slice(-2000);
-          reject(new Error(detail || `yt-dlp exited with code ${code}`));
-        });
-      });
+      const child = this.processRunner.spawn(
+        ytDlpCommand,
+        [
+          "--no-playlist",
+          "--restrict-filenames",
+          "--windows-filenames",
+          "--newline",
+          ...this.jsRuntimeArgs(),
+          "-f",
+          "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+          "--merge-output-format",
+          "mp4",
+          "-o",
+          outputTemplate,
+          url
+        ],
+        { windowsHide: true }
+      );
+      const stdout = new BoundedTextBuffer(this.mediaPolicy.maxCapturedOutputBytes, "tail");
+      const stderr = new BoundedTextBuffer(this.mediaPolicy.maxCapturedOutputBytes, "tail");
+      const supervisor = superviseProcess(child, "yt-dlp", this.mediaPolicy);
+      child.stdout?.on("data", (chunk) => stdout.append(chunk));
+      child.stderr?.on("data", (chunk) => stderr.append(chunk));
+      const result = await supervisor.promise;
+      if (result.kind === "timeout") {
+        throw new Error(`URL import timed out after ${this.mediaPolicy.timeoutMs} ms`);
+      }
+      if (result.kind === "error") {
+        throw result.error;
+      }
+      if (result.code !== 0) {
+        const detail = [stderr.toString().trim(), stdout.toString().trim()].filter(Boolean).join("\n").slice(-2000);
+        throw new Error(detail || `yt-dlp exited with code ${result.code}`);
+      }
     } catch (error) {
       await fs.promises.rm(downloadDir, { recursive: true, force: true });
       throw error;

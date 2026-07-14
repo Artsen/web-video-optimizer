@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OptimizationSettings } from "@local-video-optimizer/contracts";
 import { normalizeOptimizationSettings } from "@local-video-optimizer/video-core";
 import type { JobEntity } from "../entities/job-entity.js";
@@ -22,6 +22,11 @@ import { PackageService } from "./package-service.js";
 import type { RecoveryReport, StatePersistenceService } from "./state-persistence-service.js";
 
 const tempDirs: string[] = [];
+const processPolicy = {
+  timeoutMs: 1_800_000,
+  terminationGracePeriodMs: 5_000,
+  maxCapturedOutputBytes: 4 * 1024 * 1024
+};
 
 class FakePersistence implements StatePersistenceService {
   saves = 0;
@@ -113,8 +118,9 @@ function whisper(command = "whisper-cli", model = true): WhisperAdapter {
 }
 
 async function flush(): Promise<void> {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 async function settleProcesses(): Promise<void> {
@@ -281,7 +287,8 @@ describe("service media scheduling", () => {
       path.join(root, "tmp"),
       "model.bin",
       scheduler,
-      lifecycle
+      lifecycle,
+      processPolicy
     );
     const videoOutput = completedJob(root);
     const subtitles = completedJob(root, {
@@ -366,7 +373,16 @@ describe("fake process scheduler integration", () => {
     const root = await tempRoot();
     const runner = new FakeProcessRunner();
     const { videos, jobs, scheduler, registry, persistence, cleanup, lifecycle } = makeServices(root);
-    const execution = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
+    const execution = new JobExecutionService(
+      runner,
+      registry,
+      videos,
+      jobs,
+      persistence,
+      cleanup,
+      lifecycle,
+      processPolicy
+    );
     const service = new JobService(
       videos,
       jobs,
@@ -408,7 +424,16 @@ describe("fake process scheduler integration", () => {
     const root = await tempRoot();
     const runner = new FakeProcessRunner();
     const { videos, jobs, scheduler, registry, persistence, cleanup, lifecycle } = makeServices(root);
-    const execution = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
+    const execution = new JobExecutionService(
+      runner,
+      registry,
+      videos,
+      jobs,
+      persistence,
+      cleanup,
+      lifecycle,
+      processPolicy
+    );
     const service = new JobService(
       videos,
       jobs,
@@ -451,7 +476,16 @@ describe("fake process scheduler integration", () => {
     const { videos, jobs, scheduler, registry, persistence, cleanup, lifecycle } = makeServices(root);
     const source = video(root);
     videos.set(source);
-    const execution = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
+    const execution = new JobExecutionService(
+      runner,
+      registry,
+      videos,
+      jobs,
+      persistence,
+      cleanup,
+      lifecycle,
+      processPolicy
+    );
     const jobService = new JobService(
       videos,
       jobs,
@@ -477,7 +511,8 @@ describe("fake process scheduler integration", () => {
       path.join(root, "tmp"),
       "model.bin",
       scheduler,
-      lifecycle
+      lifecycle,
+      processPolicy
     );
 
     const subtitles = captionService.createSubtitleJob(source.id).job!;
@@ -516,7 +551,16 @@ describe("fake process scheduler integration", () => {
     const { videos, jobs, scheduler, registry, persistence, cleanup, lifecycle } = makeServices(root);
     const source = video(root);
     videos.set(source);
-    const execution = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
+    const execution = new JobExecutionService(
+      runner,
+      registry,
+      videos,
+      jobs,
+      persistence,
+      cleanup,
+      lifecycle,
+      processPolicy
+    );
     const jobService = new JobService(
       videos,
       jobs,
@@ -542,7 +586,8 @@ describe("fake process scheduler integration", () => {
       path.join(root, "tmp"),
       "model.bin",
       scheduler,
-      lifecycle
+      lifecycle,
+      processPolicy
     );
 
     const subtitles = captionService.createSubtitleJob(source.id).job!;
@@ -567,5 +612,75 @@ describe("fake process scheduler integration", () => {
     expect(runner.calls[1].command).toBe("ffmpeg");
     expect(runner.calls[1].args.slice(0, 2)).toEqual(["-progress", "pipe:1"]);
     expect(jobs.get(encode.id)?.status).toBe("running");
+  });
+
+  it("fails subtitle generation on one workflow timeout and starts the next queued job", async () => {
+    vi.useFakeTimers();
+    try {
+      const root = await tempRoot();
+      const runner = new FakeProcessRunner();
+      const { videos, jobs, scheduler, registry, persistence, cleanup, lifecycle } = makeServices(root);
+      const source = video(root);
+      videos.set(source);
+      const timeoutPolicy = { ...processPolicy, timeoutMs: 100, terminationGracePeriodMs: 25 };
+      const execution = new JobExecutionService(
+        runner,
+        registry,
+        videos,
+        jobs,
+        persistence,
+        cleanup,
+        lifecycle,
+        timeoutPolicy
+      );
+      const jobService = new JobService(
+        videos,
+        jobs,
+        path.join(root, "outputs"),
+        persistence,
+        cleanup,
+        execution,
+        new FakeRevealer(),
+        scheduler,
+        lifecycle
+      );
+      const captionService = new CaptionService(
+        videos,
+        jobs,
+        runner,
+        registry,
+        whisper(),
+        persistence,
+        cleanup,
+        execution,
+        jobService,
+        path.join(root, "outputs"),
+        path.join(root, "tmp"),
+        "model.bin",
+        scheduler,
+        lifecycle,
+        timeoutPolicy
+      );
+
+      const subtitles = captionService.createSubtitleJob(source.id).job!;
+      const encode = jobService.createOptimizationJob(source.id, settings({ outputFilename: "after-timeout" })).job!;
+      await flush();
+
+      expect(jobs.get(subtitles.id)?.status).toBe("running");
+      expect(jobs.get(encode.id)?.status).toBe("queued");
+      await vi.advanceTimersByTimeAsync(125);
+      expect(runner.processes[0].killSignals).toEqual(["SIGTERM", "SIGKILL"]);
+      runner.processes[0].emitClose(null);
+      await flush();
+      await flush();
+
+      expect(jobs.get(subtitles.id)).toMatchObject({
+        status: "failed",
+        message: "Media processing timed out after 100 ms"
+      });
+      expect(jobs.get(encode.id)?.status).toBe("queued");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

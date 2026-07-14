@@ -101,6 +101,18 @@ $env:SHUTDOWN_GRACE_PERIOD_MS="15000"
 
 This does not limit normal encode, subtitle, import, or package duration. It only bounds application shutdown.
 
+Normal media and tool processes have their own safety limits:
+
+```powershell
+$env:MEDIA_PROCESS_TIMEOUT_MS="1800000"
+$env:TOOL_COMMAND_TIMEOUT_MS="60000"
+$env:PROCESS_KILL_GRACE_PERIOD_MS="5000"
+$env:MAX_CAPTURED_PROCESS_OUTPUT_BYTES="4194304"
+```
+
+`MEDIA_PROCESS_TIMEOUT_MS` applies to FFmpeg, whisper.cpp, and yt-dlp media workflows. `TOOL_COMMAND_TIMEOUT_MS`
+applies to short capability/probe commands.
+
 Run the web app in another terminal:
 
 ```bash
@@ -122,6 +134,20 @@ npm.cmd install
 npm.cmd run dev:api
 npm.cmd run dev:web
 ```
+
+Run the fast repository checks:
+
+```bash
+npm run check
+```
+
+Run the compiled API real-media integration suite:
+
+```bash
+npm run test:integration:media
+```
+
+The integration suite requires FFmpeg and FFprobe on PATH and uses generated temporary media.
 
 ## Repository Structure
 
