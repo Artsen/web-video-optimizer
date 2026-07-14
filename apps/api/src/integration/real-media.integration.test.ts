@@ -321,6 +321,13 @@ describe("real media compiled API integration", () => {
     expect(cancelStartedResponse.status).toBe(200);
     expect(((await cancelStartedResponse.json()) as JobDto).status).toBe("canceled");
 
+    await harness.stop();
+    harness = await startCompiledApi({
+      repoRoot,
+      storageRoot,
+      env: { MAX_CONCURRENT_MEDIA_JOBS: "1", MEDIA_PROCESS_TIMEOUT_MS: "60000" }
+    });
+
     const crashFirst = await jsonRequest<JobDto>(`${harness.baseUrl}/api/videos/${video.id}/jobs`, {
       method: "POST",
       body: JSON.stringify(slowWebmJob("crash-1"))
