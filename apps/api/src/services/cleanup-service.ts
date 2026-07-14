@@ -6,9 +6,8 @@ import type { VideoEntity } from "../entities/video-entity.js";
 import type { ProcessRegistry } from "../infrastructure/processes/process-registry.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { QueuedTaskCanceler } from "../scheduling/job-scheduler.js";
+import type { StorageBoundary } from "../storage/storage-boundary.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
-
-const removeOptions = { force: true, maxRetries: 5, retryDelay: 150 };
 
 export class CleanupService {
   constructor(
@@ -17,12 +16,13 @@ export class CleanupService {
     private readonly processRegistry: ProcessRegistry,
     private readonly persistence: StatePersistenceService,
     private readonly directories: { uploadDir: string; outputDir: string; tmpDir: string },
-    private readonly queuedTasks?: QueuedTaskCanceler
+    private readonly queuedTasks?: QueuedTaskCanceler,
+    private readonly storage?: StorageBoundary
   ) {}
 
   async removeJobArtifacts(job: JobEntity): Promise<void> {
-    if (job.outputPath) await rm(job.outputPath, removeOptions);
-    if (job.sidecarPath) await rm(job.sidecarPath, removeOptions);
+    if (job.outputPath) await this.removeFile("outputs", job.outputPath);
+    if (job.sidecarPath) await this.removeFile("outputs", job.sidecarPath);
   }
 
   async removeJob(job: JobEntity): Promise<void> {
@@ -34,7 +34,7 @@ export class CleanupService {
   }
 
   async removeVideoRecord(video: VideoEntity): Promise<void> {
-    await rm(video.storedPath, removeOptions);
+    await this.removeFile("uploads", video.storedPath);
     for (const job of this.jobs.findByVideoId(video.id)) {
       if (job.videoId === video.id) {
         await this.removeJob(job);
@@ -67,11 +67,26 @@ export class CleanupService {
       if (job.outputPath) outputKeep.add(path.resolve(job.outputPath));
       if (job.sidecarPath) outputKeep.add(path.resolve(job.sidecarPath));
     }
+    if (this.storage) {
+      await this.storage.pruneDirectory("uploads", uploadKeep);
+      await this.storage.pruneDirectory("outputs", outputKeep);
+      await this.storage.pruneDirectory("tmp", new Set());
+      await this.storage.pruneDirectory("upload-staging", new Set());
+      return;
+    }
     await Promise.all([
       this.pruneDirectory(this.directories.uploadDir, uploadKeep),
       this.pruneDirectory(this.directories.outputDir, outputKeep),
       this.pruneDirectory(this.directories.tmpDir, new Set())
     ]);
+  }
+
+  private async removeFile(area: "uploads" | "outputs", filePath: string): Promise<void> {
+    if (this.storage) {
+      await this.storage.removeFile(area, filePath);
+      return;
+    }
+    await rm(filePath, { force: true, maxRetries: 5, retryDelay: 150 });
   }
 
   private async pruneDirectory(directory: string, keepPaths: Set<string>): Promise<void> {
@@ -81,7 +96,7 @@ export class CleanupService {
       entries.map(async (entry) => {
         const fullPath = path.join(directory, entry.name);
         if (keepPaths.has(path.resolve(fullPath))) return;
-        await rm(fullPath, { recursive: true, ...removeOptions });
+        await rm(fullPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 150 });
       })
     );
   }

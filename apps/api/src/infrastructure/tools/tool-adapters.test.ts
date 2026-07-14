@@ -46,6 +46,7 @@ function config(overrides: Partial<ApiConfig> = {}): ApiConfig {
     uploadDir: "data/uploads",
     outputDir: "data/outputs",
     tmpDir: "data/tmp",
+    uploadStagingDir: "data/tmp/upload-staging",
     manifestPath: "data/manifest.json",
     uploadFileSizeLimitBytes: 123,
     maxConcurrentMediaJobs: 1,

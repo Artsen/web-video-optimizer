@@ -265,7 +265,7 @@ function makeApp(runtime = new FakeRuntime(), config: { corsOrigins?: string[]; 
         jsonBodyLimitBytes: config.jsonBodyLimitBytes ?? 5 * 1024 * 1024
       },
       runtime,
-      upload: multer({ storage: multer.memoryStorage() })
+      upload: multer({ storage: multer.memoryStorage() }).single("video")
     })
   };
 }

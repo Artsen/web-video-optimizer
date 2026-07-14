@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,7 @@ import type { VideoEntity } from "../entities/video-entity.js";
 import type { ManifestLoadResult, ManifestStore } from "../persistence/manifest-store.js";
 import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
 import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
+import { StorageBoundary } from "../storage/storage-boundary.js";
 import { ManifestStatePersistenceService } from "./state-persistence-service.js";
 
 const tempDirs: string[] = [];
@@ -201,5 +202,39 @@ describe("ManifestStatePersistenceService", () => {
     });
     expect(jobs.get("dangling")).toBeUndefined();
     await expect(writeFile(running.outputPath!, "can-create-again")).resolves.toBeUndefined();
+  });
+
+  it("fails startup on external manifest paths before rewriting or deleting external files", async () => {
+    const root = await tempRoot();
+    const outsideRoot = await mkdtemp(path.join(os.tmpdir(), "web-video-external-"));
+    tempDirs.push(outsideRoot);
+    const sentinel = path.join(outsideRoot, "sentinel.mp4");
+    await writeFile(sentinel, "do-not-touch");
+    const source = video(root, { storedPath: sentinel });
+    const store = new DeferredManifestStore();
+    store.loadResult = {
+      kind: "loaded",
+      source: "primary",
+      recoveredFromBackup: false,
+      snapshot: { videos: [source], jobs: [] }
+    };
+    const storage = new StorageBoundary({
+      root,
+      uploads: path.join(root, "uploads"),
+      outputs: path.join(root, "outputs"),
+      tmp: path.join(root, "tmp"),
+      "upload-staging": path.join(root, "tmp", "upload-staging")
+    });
+    await storage.initialize();
+    const service = new ManifestStatePersistenceService(
+      new InMemoryVideoRepository(),
+      new InMemoryJobRepository(),
+      store,
+      { tmpDir: path.join(root, "tmp"), storage }
+    );
+
+    await expect(service.load()).rejects.toThrow("Path escapes uploads");
+    expect(store.saves).toHaveLength(0);
+    await expect(readFile(sentinel, "utf8")).resolves.toBe("do-not-touch");
   });
 });

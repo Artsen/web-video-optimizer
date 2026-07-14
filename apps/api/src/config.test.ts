@@ -189,6 +189,15 @@ describe("parseApiConfig", () => {
     }
   });
 
+  it("accepts and validates upload file size limits separately from JSON limits", () => {
+    expect(parseApiConfig({ UPLOAD_FILE_SIZE_LIMIT_BYTES: "1024" }, options).uploadFileSizeLimitBytes).toBe(1024);
+    for (const value of ["0", "-1", "1.5", "many", ""]) {
+      expect(() => parseApiConfig({ UPLOAD_FILE_SIZE_LIMIT_BYTES: value }, options)).toThrow(
+        `Invalid UPLOAD_FILE_SIZE_LIMIT_BYTES: ${value}`
+      );
+    }
+  });
+
   it("derives storage paths from an explicit storage root", () => {
     const storageRoot = "D:\\video-data";
     const config = parseApiConfig({ STORAGE_ROOT: storageRoot }, options);
@@ -197,6 +206,7 @@ describe("parseApiConfig", () => {
     expect(config.uploadDir).toBe(path.join(storageRoot, "uploads"));
     expect(config.outputDir).toBe(path.join(storageRoot, "outputs"));
     expect(config.tmpDir).toBe(path.join(storageRoot, "tmp"));
+    expect(config.uploadStagingDir).toBe(path.join(storageRoot, "tmp", "upload-staging"));
     expect(config.manifestPath).toBe(path.join(storageRoot, "manifest.json"));
   });
 

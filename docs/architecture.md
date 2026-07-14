@@ -199,32 +199,83 @@ paths, and sidecar paths are no longer part of public JSON responses.
 
 1. The user drops a video into the browser.
 2. The web app uploads it to `POST /api/videos`.
-3. The API stores the file under the local storage root and runs FFprobe.
-4. The API returns normalized metadata plus compatibility warnings.
-5. The user chooses optimization settings.
-6. The web app starts an encoding job with `POST /api/videos/:id/jobs`.
-7. The route layer delegates job creation to `ApiRuntime`.
-8. The API enqueues process-backed media work through the bounded scheduler.
-9. When a media slot is available, the API starts FFmpeg/Whisper through the process-runner boundary and updates
-   repository-backed job state through explicit lifecycle transitions.
-10. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
-11. The final output is streamed from `GET /api/jobs/:id/download`.
+3. Multer writes the request body to upload staging under the local storage root.
+4. The API admits the staged candidate through filename, signature, FFprobe, duplicate, and storage-boundary checks.
+5. The API moves accepted media into permanent source storage and persists the manifest.
+6. The API returns normalized metadata plus compatibility warnings.
+7. The user chooses optimization settings.
+8. The web app starts an encoding job with `POST /api/videos/:id/jobs`.
+9. The route layer delegates job creation to `ApiRuntime`.
+10. The API enqueues process-backed media work through the bounded scheduler.
+11. When a media slot is available, the API starts FFmpeg/Whisper through the process-runner boundary and updates
+    repository-backed job state through explicit lifecycle transitions.
+12. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
+13. The final output is streamed from `GET /api/jobs/:id/download`.
 
 ## Storage
 
 The API uses a local storage root with these subdirectories:
 
-- `uploads`: original uploaded files
+- `uploads`: admitted original source files
 - `outputs`: optimized files
-- `tmp`: scratch space for future sample encodes
+- `tmp`: scratch space for imports, media processing, and package assembly
+- `tmp/upload-staging`: Multer 2 staging area for incoming browser uploads
 
 The Docker setup stores this under a named Docker volume called `video_data`.
+
+`StorageBoundary` owns the explicit storage areas `uploads`, `outputs`, `tmp`, and `upload-staging`. It is responsible
+for root canonicalization, lexical containment, existing-file realpath containment, symlink rejection, regular-file
+checks, safe target validation, safe reads, safe moves, safe removals, and orphan pruning. It does not own repository
+state, DTO mapping, Express responses, job lifecycle transitions, or optimization settings.
+
+Initialization creates managed directories, verifies that each managed root is a real non-symlink directory, records
+canonical real paths, and confirms every area remains beneath `STORAGE_ROOT`. Integrity failures happen before manifest
+restoration or orphan pruning. This prevents a bad root or tampered manifest from causing cleanup against external
+paths.
+
+Persisted manifest paths are treated as untrusted private state. `VideoEntity.storedPath` must validate as `uploads`;
+`JobEntity.outputPath` and `JobEntity.sidecarPath` must validate as `outputs`. Contained missing files follow existing
+restart recovery policy, but external or symlink-backed paths fail startup safely before rewrite or pruning.
+
+Upload staging uses a transaction-like lifecycle:
+
+1. Multer writes one expected `video` file to `tmp/upload-staging` with an internal filename.
+2. Admission validates the staged candidate is contained, regular, nonempty, and within `UPLOAD_FILE_SIZE_LIMIT_BYTES`.
+3. The original filename is validated as display metadata only.
+4. A bounded prefix read checks plausible container signatures without loading the full video or parsing codecs.
+5. The staged file is hashed and checked for duplicates.
+6. FFprobe validates a supported container with at least one real temporal video stream, finite positive dimensions, and
+   finite positive duration.
+7. The API chooses a canonical extension, generates an internal ID, and builds a controlled permanent path.
+8. The file moves into `uploads`, the repository entity is inserted, and the manifest is persisted.
+9. Duplicate, probe, move, repository, or persistence failures remove staged/permanent files where possible and leave no
+   visible duplicate record.
+
+Client filename, extension, and MIME claims are never authoritative. Valid media sent as `application/octet-stream` may
+be accepted; fake media declared as `video/mp4` is rejected by signature/probe admission. Audio-only files, still-image
+or attached-cover-art-only media, corrupt containers, truncated containers, unsupported containers, probe timeout, and
+probe overflow are rejected.
+
+URL imports use the same admission flow after `yt-dlp` writes a temporary file beneath `tmp`. A successful `yt-dlp` exit
+alone is not enough to create a video entity.
+
+Streaming and downloads use contained descriptors rather than raw `res.download()` calls. Source, output, sidecar,
+poster, and package responses open files after storage validation, use the opened file size for full/range responses,
+preserve existing `206`/`416` byte-range behavior, and close file handles on completion, request abort, and stream
+errors. `Content-Disposition` filenames are sanitized to remove path separators, quotes, and CR/LF with a nonempty
+fallback.
+
+Filesystem race limitations remain the normal portable Node.js limitations: containment is checked before open and the
+opened handle is `fstat` checked, but Node does not provide one cross-platform `O_NOFOLLOW` flow for every operation.
+The implementation therefore uses lexical checks, `lstat`, symlink rejection, `realpath`, and handle/stat validation
+where supported and tests the real symlink case on Ubuntu CI.
 
 ## Security And Privacy
 
 The app is intended for trusted local use. It avoids cloud APIs and remote processing. The backend sanitizes generated
 filenames and never executes shell strings; FFmpeg is invoked with argument arrays.
 
-Phase 6A hardens network defaults, CORS, route validation, JSON limits, error mapping, and API headers. Phase 6B still
-owns upload MIME/content inspection, storage-path containment, symlink containment, and the Multer 2 migration. For a
-production-grade local release, also consider automatic retention cleanup and optional authentication for LAN exposure.
+Phase 6A hardens network defaults, CORS, route validation, JSON limits, error mapping, and API headers. Phase 6B hardens
+upload admission, MIME/extension spoofing resistance, storage-path containment, symlink rejection, and the Multer 2
+migration. For a production-grade local release, also consider automatic retention cleanup and optional authentication
+for LAN exposure.

@@ -1,8 +1,8 @@
-import multer from "multer";
 import { createApp } from "./app.js";
 import { isLoopbackHost, parseApiConfig } from "./config.js";
 import { createProductionRuntime } from "./runtime/production-runtime.js";
 import { startServerLifecycle } from "./server-lifecycle.js";
+import { createUploadMiddleware } from "./uploads/create-upload-middleware.js";
 
 async function main(): Promise<void> {
   const config = parseApiConfig(process.env, {
@@ -15,14 +15,7 @@ async function main(): Promise<void> {
   const runtime = createProductionRuntime(config);
   await runtime.initialize();
 
-  const upload = multer({
-    dest: config.uploadDir,
-    limits: {
-      fileSize: config.uploadFileSizeLimitBytes
-    }
-  });
-
-  const app = createApp({ config, runtime, upload });
+  const app = createApp({ config, runtime, upload: createUploadMiddleware(config) });
   await startServerLifecycle({ app, runtime, host: config.host, port: config.port });
 }
 

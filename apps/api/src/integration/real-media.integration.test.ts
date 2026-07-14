@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { HistorySnapshot, JobDto, VideoRecordDto } from "@local-video-optimizer/contracts";
 import { startCompiledApi, type CompiledApiHarness } from "./helpers/compiled-api-harness.js";
-import { ensureMediaTools, generateAvFixture, probeJson } from "./helpers/generated-media.js";
+import { ensureMediaTools, generateAudioFixture, generateAvFixture, probeJson } from "./helpers/generated-media.js";
 import { jsonRequest, waitForJobStatus, waitForTerminalJob } from "./helpers/polling.js";
 import { zipEntryNames } from "./helpers/zip.js";
 
@@ -18,12 +18,43 @@ async function tempRoot(label: string): Promise<string> {
   return root;
 }
 
-async function uploadVideo(harness: CompiledApiHarness, filePath: string, fileName: string): Promise<VideoRecordDto> {
+async function postVideo(
+  harness: CompiledApiHarness,
+  filePath: string,
+  fileName: string,
+  type = "video/mp4"
+): Promise<Response> {
   const form = new FormData();
-  form.append("video", new Blob([await readFile(filePath)], { type: "video/mp4" }), fileName);
-  const response = await fetch(`${harness.baseUrl}/api/videos`, { method: "POST", body: form });
+  form.append("video", new Blob([await readFile(filePath)], { type }), fileName);
+  return fetch(`${harness.baseUrl}/api/videos`, { method: "POST", body: form });
+}
+
+async function uploadVideo(
+  harness: CompiledApiHarness,
+  filePath: string,
+  fileName: string,
+  type = "video/mp4"
+): Promise<VideoRecordDto> {
+  const response = await postVideo(harness, filePath, fileName, type);
   if (!response.ok) throw new Error(`upload failed: ${response.status} ${await response.text()}`);
   return (await response.json()) as VideoRecordDto;
+}
+
+async function expectUploadFailure(
+  harness: CompiledApiHarness,
+  filePath: string,
+  fileName: string,
+  expectedStatus: number,
+  expectedCode: string,
+  type = "video/mp4"
+): Promise<void> {
+  const response = await postVideo(harness, filePath, fileName, type);
+  expect(response.status).toBe(expectedStatus);
+  expect(await response.json()).toMatchObject({ code: expectedCode });
+}
+
+async function directoryEntries(directory: string): Promise<string[]> {
+  return readdir(directory).catch(() => []);
 }
 
 async function downloadBuffer(url: string, init?: RequestInit): Promise<{ response: Response; buffer: Buffer }> {
@@ -164,6 +195,51 @@ describe("real media compiled API integration", () => {
       await expect(fetch(`${harness.baseUrl}/api/videos/${video.id}`, { method: "DELETE" })).resolves.toMatchObject({
         status: 204
       });
+    });
+  });
+
+  it("admits valid octet-stream media and rejects fake, audio-only, corrupt, and oversized uploads", async () => {
+    await withApi("admission", { UPLOAD_FILE_SIZE_LIMIT_BYTES: "1048576" }, async (harness, root) => {
+      const storageRoot = path.join(root, "data");
+      const stagingDir = path.join(storageRoot, "tmp", "upload-staging");
+      const uploadsDir = path.join(storageRoot, "uploads");
+      const sourcePath = path.join(root, "source.mp4");
+      const fakePath = path.join(root, "fake.mp4");
+      const htmlPath = path.join(root, "fake-html.mp4");
+      const audioPath = path.join(root, "audio-only.m4a");
+      const corruptPath = path.join(root, "corrupt.mp4");
+      await generateAvFixture(sourcePath, 1);
+      await writeFile(fakePath, "not a video");
+      await writeFile(htmlPath, "<!doctype html><script>alert(1)</script>");
+      await generateAudioFixture(audioPath, 1);
+      await writeFile(corruptPath, Buffer.from("00000018667479706d703432", "hex"));
+
+      const video = await uploadVideo(harness, sourcePath, "source.bin", "application/octet-stream");
+      expect(video.metadata.videoCodec).toBeTruthy();
+      expect(await directoryEntries(stagingDir)).toEqual([]);
+      const uploadCount = (await directoryEntries(uploadsDir)).length;
+
+      const duplicate = await uploadVideo(harness, sourcePath, "duplicate.mp4", "application/octet-stream");
+      expect(duplicate.id).toBe(video.id);
+      expect(await directoryEntries(stagingDir)).toEqual([]);
+      expect(await directoryEntries(uploadsDir)).toHaveLength(uploadCount);
+
+      await expectUploadFailure(harness, fakePath, "fake.mp4", 415, "UNSUPPORTED_MEDIA_TYPE", "video/mp4");
+      await expectUploadFailure(harness, htmlPath, "fake-html.mp4", 415, "UNSUPPORTED_MEDIA_TYPE", "video/mp4");
+      await expectUploadFailure(harness, audioPath, "audio-only.mp4", 422, "INVALID_MEDIA", "video/mp4");
+      await expectUploadFailure(harness, corruptPath, "corrupt.mp4", 422, "INVALID_MEDIA", "application/octet-stream");
+      expect(await directoryEntries(stagingDir)).toEqual([]);
+      expect(await directoryEntries(uploadsDir)).toHaveLength(uploadCount);
+    });
+
+    await withApi("oversize", { UPLOAD_FILE_SIZE_LIMIT_BYTES: "10" }, async (harness, root) => {
+      const sourcePath = path.join(root, "source.mp4");
+      const storageRoot = path.join(root, "data");
+      await generateAvFixture(sourcePath, 1);
+
+      await expectUploadFailure(harness, sourcePath, "source.mp4", 413, "UPLOAD_TOO_LARGE");
+      expect(await directoryEntries(path.join(storageRoot, "tmp", "upload-staging"))).toEqual([]);
+      expect(await directoryEntries(path.join(storageRoot, "uploads"))).toEqual([]);
     });
   });
 

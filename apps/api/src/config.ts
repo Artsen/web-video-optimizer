@@ -10,6 +10,7 @@ export type ApiConfig = {
   uploadDir: string;
   outputDir: string;
   tmpDir: string;
+  uploadStagingDir: string;
   manifestPath: string;
   uploadFileSizeLimitBytes: number;
   maxConcurrentMediaJobs: number;
@@ -103,6 +104,7 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
 
   const maxConcurrentMediaJobs = parsePositiveInteger(source, "MAX_CONCURRENT_MEDIA_JOBS", "1");
   const jsonBodyLimitBytes = parsePositiveInteger(source, "JSON_BODY_LIMIT_BYTES", "5242880");
+  const uploadFileSizeLimitBytes = parsePositiveInteger(source, "UPLOAD_FILE_SIZE_LIMIT_BYTES", "2147483648");
   const shutdownGracePeriodMs = parsePositiveInteger(source, "SHUTDOWN_GRACE_PERIOD_MS", "15000");
   const mediaProcessTimeoutMs = parsePositiveInteger(source, "MEDIA_PROCESS_TIMEOUT_MS", "1800000");
   const toolCommandTimeoutMs = parsePositiveInteger(source, "TOOL_COMMAND_TIMEOUT_MS", "60000");
@@ -121,8 +123,9 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     uploadDir: path.join(storageRoot, "uploads"),
     outputDir: path.join(storageRoot, "outputs"),
     tmpDir: path.join(storageRoot, "tmp"),
+    uploadStagingDir: path.join(storageRoot, "tmp", "upload-staging"),
     manifestPath: path.join(storageRoot, "manifest.json"),
-    uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
+    uploadFileSizeLimitBytes,
     maxConcurrentMediaJobs,
     shutdownGracePeriodMs,
     mediaProcessTimeoutMs,

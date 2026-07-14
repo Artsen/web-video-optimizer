@@ -1,5 +1,5 @@
-import type multer from "multer";
 import { Router } from "express";
+import type { RequestHandler } from "express";
 import { asyncHandler } from "../middleware/async-handler.js";
 import { requireJsonBody } from "../middleware/require-json.js";
 import type { ApiRuntime } from "../runtime/api-runtime.js";
@@ -7,12 +7,12 @@ import { IdParamsSchema, RenameVideoBodySchema } from "../validation/api-schemas
 import { parseParams, parseRequest } from "../validation/request-validation.js";
 import { streamFile } from "./stream-file.js";
 
-export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): Router {
+export function createVideoRouter(runtime: ApiRuntime, upload: RequestHandler): Router {
   const router = Router();
 
   router.post(
     "/api/videos",
-    upload.single("video"),
+    upload,
     asyncHandler(async (req, res) => {
       if (!req.file) {
         res.status(400).json({ error: "Missing video file" });
@@ -42,15 +42,18 @@ export function createVideoRouter(runtime: ApiRuntime, upload: multer.Multer): R
     })
   );
 
-  router.get("/api/videos/:id/download", (req, res) => {
-    const params = parseParams(IdParamsSchema, req);
-    const descriptor = runtime.getVideoDownload(params.id);
-    if (!descriptor) {
-      res.status(404).json({ error: "Source video not found" });
-      return;
-    }
-    res.download(descriptor.filePath, descriptor.fileName);
-  });
+  router.get(
+    "/api/videos/:id/download",
+    asyncHandler(async (req, res) => {
+      const params = parseParams(IdParamsSchema, req);
+      const descriptor = runtime.getVideoDownload(params.id);
+      if (!descriptor) {
+        res.status(404).json({ error: "Source video not found" });
+        return;
+      }
+      await streamFile(req, res, descriptor, "attachment");
+    })
+  );
 
   router.patch(
     "/api/videos/:id",

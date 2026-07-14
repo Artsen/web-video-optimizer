@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import { promisify } from "node:util";
 import type { OptimizationSettings } from "@local-video-optimizer/contracts";
 import type { ApiConfig } from "../config.js";
 import { toHistorySnapshotDto } from "../dto/history-dto.js";
@@ -36,9 +34,9 @@ import { JobService } from "../services/job-service.js";
 import { PackageService } from "../services/package-service.js";
 import { ManifestStatePersistenceService } from "../services/state-persistence-service.js";
 import { VideoService } from "../services/video-service.js";
+import { StorageBoundary } from "../storage/storage-boundary.js";
+import { MediaAdmissionService } from "../uploads/media-admission-service.js";
 import type { ApiRuntime, UploadedVideoFile } from "./api-runtime.js";
-
-const mkdir = promisify(fs.mkdir);
 
 export interface ProductionRuntime extends ApiRuntime {
   shutdown(): Promise<void>;
@@ -88,10 +86,25 @@ export function createProductionRuntime(
   const fileRevealer = dependencies.fileRevealer ?? new DesktopFileRevealer(processRunner);
   const jobScheduler = dependencies.jobScheduler ?? new InMemoryJobScheduler(apiConfig.maxConcurrentMediaJobs);
   const jobLifecycle = new JobLifecycleService();
+  const storage = new StorageBoundary({
+    root: apiConfig.storageRoot,
+    uploads: apiConfig.uploadDir,
+    outputs: apiConfig.outputDir,
+    tmp: apiConfig.tmpDir,
+    "upload-staging": apiConfig.uploadStagingDir
+  });
 
   const statePersistence = new ManifestStatePersistenceService(videoRepository, jobRepository, manifestStore, {
-    tmpDir: apiConfig.tmpDir
+    tmpDir: apiConfig.tmpDir,
+    storage
   });
+  const admissionService = new MediaAdmissionService(
+    videoRepository,
+    mediaProbe,
+    statePersistence,
+    storage,
+    apiConfig.uploadFileSizeLimitBytes
+  );
   const cleanupService = new CleanupService(
     videoRepository,
     jobRepository,
@@ -102,7 +115,8 @@ export function createProductionRuntime(
       outputDir: apiConfig.outputDir,
       tmpDir: apiConfig.tmpDir
     },
-    jobScheduler
+    jobScheduler,
+    storage
   );
   const capabilitiesService = new CapabilitiesService(ffmpegCapabilitiesAdapter, whisperAdapter, videoDownloader);
   const videoService = new VideoService(
@@ -113,7 +127,9 @@ export function createProductionRuntime(
     cleanupService,
     statePersistence,
     apiConfig.uploadDir,
-    apiConfig.tmpDir
+    apiConfig.tmpDir,
+    admissionService,
+    storage
   );
   const jobExecutionService = new JobExecutionService(
     processRunner,
@@ -134,7 +150,8 @@ export function createProductionRuntime(
     jobExecutionService,
     fileRevealer,
     jobScheduler,
-    jobLifecycle
+    jobLifecycle,
+    storage
   );
   const captionService = new CaptionService(
     videoRepository,
@@ -191,11 +208,7 @@ export function createProductionRuntime(
       videoRepository.clear();
       jobRepository.clear();
       processRegistry.clear();
-      await Promise.all([
-        mkdir(apiConfig.uploadDir, { recursive: true }),
-        mkdir(apiConfig.outputDir, { recursive: true }),
-        mkdir(apiConfig.tmpDir, { recursive: true })
-      ]);
+      await storage.initialize();
       const recovery = await statePersistence.load();
       await videoService.mergeDuplicateVideos();
       await cleanupService.pruneOrphanFiles();
