@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { requireJsonBody } from "../middleware/require-json.js";
 import type { ApiRuntime } from "../runtime/api-runtime.js";
+import { HistoryDeleteBodySchema } from "../validation/api-schemas.js";
+import { parseBody } from "../validation/request-validation.js";
 
 export function createHistoryRouter(runtime: ApiRuntime): Router {
   const router = Router();
@@ -11,10 +14,10 @@ export function createHistoryRouter(runtime: ApiRuntime): Router {
 
   router.post(
     "/api/history/delete",
+    requireJsonBody,
     asyncHandler(async (req, res) => {
-      const videoIds = Array.isArray(req.body?.videoIds) ? (req.body.videoIds as string[]) : [];
-      const jobIds = Array.isArray(req.body?.jobIds) ? (req.body.jobIds as string[]) : [];
-      res.json(await runtime.deleteHistory(videoIds, jobIds));
+      const body = parseBody(HistoryDeleteBodySchema, req);
+      res.json(await runtime.deleteHistory(body.videoIds, body.jobIds));
     })
   );
 

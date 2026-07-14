@@ -1,6 +1,6 @@
 import multer from "multer";
 import { createApp } from "./app.js";
-import { parseApiConfig } from "./config.js";
+import { isLoopbackHost, parseApiConfig } from "./config.js";
 import { createProductionRuntime } from "./runtime/production-runtime.js";
 import { startServerLifecycle } from "./server-lifecycle.js";
 
@@ -9,6 +9,9 @@ async function main(): Promise<void> {
     cwd: process.cwd(),
     nodeExecPath: process.execPath
   });
+  if (config.allowLanAccess && !isLoopbackHost(config.host)) {
+    console.warn("LAN access is enabled. The API is exposed beyond loopback on a trusted network.");
+  }
   const runtime = createProductionRuntime(config);
   await runtime.initialize();
 

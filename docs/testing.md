@@ -99,6 +99,16 @@ The initial unit tests cover pure behavior extracted from the current API and we
 - API configuration parsing
 - API route composition through `createApp`
 - Supertest route tests without binding a TCP port
+- Config security tests for loopback defaults, explicit LAN opt-in, exact CORS origin parsing, and JSON body limits
+- API-private route-schema tests for safe IDs, strict objects, UTF-8 byte limits, control characters, path separators,
+  prototype-like fields, and limited validation details
+- HTTP validation tests for every mutable JSON route, including optimization, sample, poster, rename, history delete,
+  captions, subtitle muxing, package creation, and YouTube URL import
+- CORS allowlist tests for default local origins, requests with no Origin header, valid preflight, and denied origins
+- Error-leakage tests for invalid JSON, oversized JSON, unsupported media types, unknown API routes, and generic
+  internal-error responses
+- Malicious-boundary tests for traversal-like IDs, percent-decoded traversal, NUL/control characters, prototype-shaped
+  JSON, and YouTube suffix/path-domain attacks
 - API response schema compatibility with shared contracts
 - Privacy assertions that public JSON does not expose storage paths, output paths, sidecar paths, or source hashes
 - Pure video-core settings normalization, FFmpeg argument-array construction, FFprobe normalization, compatibility
@@ -200,6 +210,10 @@ The real-media integration suite currently covers:
 - Website package ZIP creation and privacy checks
 - Media-process timeout containment, partial-output cleanup, and later work acceptance
 - API restart recovery for running and queued jobs
+
+The real-media integration suite is expected to remain compatible with the safer defaults by explicitly using loopback
+host settings in the compiled API harness. Most request-validation coverage belongs in fast Supertest route tests rather
+than real-media scenarios.
 
 ## Not Covered Yet
 

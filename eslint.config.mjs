@@ -75,6 +75,44 @@ export default tseslint.config(
     }
   },
   {
+    files: ["apps/api/src/validation/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "cors", "multer", "react", "react-dom", "node:child_process"],
+          patterns: [
+            "../services/**",
+            "../repositories/**",
+            "../persistence/**",
+            "../entities/**",
+            "../runtime/**",
+            "../infrastructure/**"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/api/src/errors/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["express", "cors", "multer", "react", "react-dom", "node:child_process"],
+          patterns: [
+            "../services/**",
+            "../repositories/**",
+            "../persistence/**",
+            "../entities/**",
+            "../runtime/**",
+            "../infrastructure/**"
+          ]
+        }
+      ]
+    }
+  },
+  {
     files: ["apps/api/src/services/**/*.ts"],
     rules: {
       "no-restricted-imports": [
@@ -214,7 +252,9 @@ export default tseslint.config(
             "../../api/src/scheduling/**",
             "../../api/src/services/**",
             "../../api/src/persistence/**",
-            "../../api/src/runtime/**"
+            "../../api/src/runtime/**",
+            "../../api/src/validation/**",
+            "../../api/src/errors/**"
           ]
         }
       ]

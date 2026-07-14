@@ -1,13 +1,23 @@
 import { Router } from "express";
 import { asyncHandler } from "../middleware/async-handler.js";
+import { requireJsonBody } from "../middleware/require-json.js";
 import type { ApiRuntime } from "../runtime/api-runtime.js";
+import {
+  IdParamsSchema,
+  OptimizationRequestBodySchema,
+  PosterRequestBodySchema,
+  RenameJobBodySchema,
+  SampleRequestBodySchema
+} from "../validation/api-schemas.js";
+import { parseBody, parseParams, parseRequest } from "../validation/request-validation.js";
 import { streamFile } from "./stream-file.js";
 
 export function createJobRouter(runtime: ApiRuntime): Router {
   const router = Router();
 
-  router.post("/api/videos/:id/jobs", (req, res) => {
-    const result = runtime.createOptimizationJob(req.params.id, req.body ?? {});
+  router.post("/api/videos/:id/jobs", requireJsonBody, (req, res) => {
+    const { params, body } = parseRequest({ params: IdParamsSchema, body: OptimizationRequestBodySchema }, req);
+    const result = runtime.createOptimizationJob(params.id, body);
     if (!result.job) {
       res.status(404).json({ error: "Video not found" });
       return;
@@ -15,8 +25,10 @@ export function createJobRouter(runtime: ApiRuntime): Router {
     res.status(result.status).json(result.job);
   });
 
-  router.post("/api/videos/:id/sample", (req, res) => {
-    const result = runtime.createSampleJob(req.params.id, req.body ?? {}, req.body?.sampleSeconds);
+  router.post("/api/videos/:id/sample", requireJsonBody, (req, res) => {
+    const { params, body } = parseRequest({ params: IdParamsSchema, body: SampleRequestBodySchema }, req);
+    const { sampleSeconds, ...settings } = body;
+    const result = runtime.createSampleJob(params.id, settings, sampleSeconds);
     if (!result.job) {
       res.status(404).json({ error: "Video not found" });
       return;
@@ -24,8 +36,9 @@ export function createJobRouter(runtime: ApiRuntime): Router {
     res.status(result.status).json(result.job);
   });
 
-  router.post("/api/videos/:id/poster", (req, res) => {
-    const job = runtime.createPosterJob(req.params.id, req.body?.atSeconds);
+  router.post("/api/videos/:id/poster", requireJsonBody, (req, res) => {
+    const { params, body } = parseRequest({ params: IdParamsSchema, body: PosterRequestBodySchema }, req);
+    const job = runtime.createPosterJob(params.id, body.atSeconds);
     if (!job) {
       res.status(404).json({ error: "Video not found" });
       return;
@@ -34,7 +47,11 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   });
 
   router.post("/api/videos/:id/pair", (req, res) => {
-    const result = runtime.createPairJobs(req.params.id);
+    const params = parseParams(IdParamsSchema, req);
+    if (req.body && Object.keys(req.body as Record<string, unknown>).length > 0) {
+      parseBody(OptimizationRequestBodySchema, req);
+    }
+    const result = runtime.createPairJobs(params.id);
     if (!result) {
       res.status(404).json({ error: "Video not found" });
       return;
@@ -43,7 +60,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   });
 
   router.get("/api/jobs/:id", (req, res) => {
-    const job = runtime.getJob(req.params.id);
+    const params = parseParams(IdParamsSchema, req);
+    const job = runtime.getJob(params.id);
     if (!job) {
       res.status(404).json({ error: "Job not found" });
       return;
@@ -53,14 +71,11 @@ export function createJobRouter(runtime: ApiRuntime): Router {
 
   router.patch(
     "/api/jobs/:id",
+    requireJsonBody,
     asyncHandler(async (req, res) => {
-      const nextName = String(req.body?.outputFileName ?? "").trim();
-      if (!nextName) {
-        res.status(400).json({ error: "Enter an output filename." });
-        return;
-      }
+      const { params, body } = parseRequest({ params: IdParamsSchema, body: RenameJobBodySchema }, req);
 
-      const job = await runtime.renameJob(req.params.id, nextName);
+      const job = await runtime.renameJob(params.id, body.outputFileName);
       if (!job) {
         res.status(404).json({ error: "Job output not found" });
         return;
@@ -72,7 +87,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   router.post(
     "/api/jobs/:id/cancel",
     asyncHandler(async (req, res) => {
-      const job = await runtime.cancelJob(req.params.id);
+      const params = parseParams(IdParamsSchema, req);
+      const job = await runtime.cancelJob(params.id);
       if (!job) {
         res.status(404).json({ error: "Job not found" });
         return;
@@ -82,7 +98,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   );
 
   router.get("/api/jobs/:id/events", (req, res) => {
-    if (!runtime.getJob(req.params.id)) {
+    const params = parseParams(IdParamsSchema, req);
+    if (!runtime.getJob(params.id)) {
       res.status(404).json({ error: "Job not found" });
       return;
     }
@@ -92,7 +109,7 @@ export function createJobRouter(runtime: ApiRuntime): Router {
     res.setHeader("Connection", "keep-alive");
 
     const send = () => {
-      const job = runtime.getJob(req.params.id);
+      const job = runtime.getJob(params.id);
       if (!job) {
         clearInterval(interval);
         res.end();
@@ -111,7 +128,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   });
 
   router.get("/api/jobs/:id/download", (req, res) => {
-    const descriptor = runtime.getJobDownload(req.params.id);
+    const params = parseParams(IdParamsSchema, req);
+    const descriptor = runtime.getJobDownload(params.id);
     if (!descriptor) {
       res.status(404).json({ error: "Output not available" });
       return;
@@ -120,7 +138,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   });
 
   router.get("/api/jobs/:id/sidecar", (req, res) => {
-    const descriptor = runtime.getJobSidecar(req.params.id);
+    const params = parseParams(IdParamsSchema, req);
+    const descriptor = runtime.getJobSidecar(params.id);
     if (!descriptor) {
       res.status(404).json({ error: "Sidecar output not available" });
       return;
@@ -131,7 +150,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   router.post(
     "/api/jobs/:id/reveal",
     asyncHandler(async (req, res) => {
-      if (!(await runtime.revealJob(req.params.id))) {
+      const params = parseParams(IdParamsSchema, req);
+      if (!(await runtime.revealJob(params.id))) {
         res.status(404).json({ error: "Output not available" });
         return;
       }
@@ -142,7 +162,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   router.get(
     "/api/jobs/:id/output",
     asyncHandler(async (req, res) => {
-      const descriptor = runtime.getJobOutput(req.params.id);
+      const params = parseParams(IdParamsSchema, req);
+      const descriptor = runtime.getJobOutput(params.id);
       if (!descriptor) {
         res.status(404).json({ error: "Output not available" });
         return;
@@ -154,7 +175,8 @@ export function createJobRouter(runtime: ApiRuntime): Router {
   router.delete(
     "/api/jobs/:id",
     asyncHandler(async (req, res) => {
-      if (!(await runtime.deleteJob(req.params.id))) {
+      const params = parseParams(IdParamsSchema, req);
+      if (!(await runtime.deleteJob(params.id))) {
         res.status(404).json({ error: "Job not found" });
         return;
       }

@@ -39,7 +39,9 @@ function config(overrides: Partial<ApiConfig> = {}): ApiConfig {
   return {
     host: "127.0.0.1",
     port: 4000,
-    corsOrigin: true,
+    allowLanAccess: false,
+    corsOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"],
+    jsonBodyLimitBytes: 5 * 1024 * 1024,
     storageRoot: "data",
     uploadDir: "data/uploads",
     outputDir: "data/outputs",

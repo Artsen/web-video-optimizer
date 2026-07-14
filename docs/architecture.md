@@ -52,6 +52,22 @@ Route modules in `apps/api/src/routes` are HTTP adapters. They extract request p
 status codes, response headers, SSE mechanics, downloads, and byte-range streaming. They depend on the temporary
 coarse `ApiRuntime` boundary rather than global maps or production storage details.
 
+The HTTP validation boundary is API-private. `apps/api/src/validation` contains Zod schemas and small parsing helpers
+for route params, JSON bodies, safe identifiers, filenames, YouTube import URLs, captions, package requests, and
+optimization settings. Route adapters validate at the edge and pass typed values into `ApiRuntime`; services still own
+business normalization and workflow behavior.
+
+`apps/api/src/errors` and `apps/api/src/middleware` map known API failures to stable JSON responses. Validation errors,
+invalid JSON, oversized JSON, unsupported media types, denied CORS origins, and unknown API routes keep a top-level
+`error` field plus a stable `code`. Unknown internal exceptions are logged server-side and returned as generic
+`INTERNAL_ERROR` responses without leaking filesystem paths, command arguments, or process details.
+
+The API binds to `127.0.0.1` by default. Binding to `0.0.0.0`, `::`, or another non-loopback host requires
+`ALLOW_LAN_ACCESS=true` and remains a trusted-network feature without authentication. CORS uses an exact normalized
+origin allowlist from `CORS_ORIGIN`, defaulting to the two local Vite origins. The API disables Express fingerprinting
+and sets conservative API security headers without adding HSTS, CSP, or resource policies that would break local HTTP,
+downloads, byte ranges, SSE, or media preview.
+
 `apps/api/src/runtime/production-runtime.ts` is the production composition root and `ApiRuntime` facade. It constructs
 runtime-scoped repositories, the file manifest store, process infrastructure, tool adapters, and focused application
 services, then delegates route-facing operations through the stable `ApiRuntime` interface.
@@ -206,6 +222,9 @@ The Docker setup stores this under a named Docker volume called `video_data`.
 
 ## Security And Privacy
 
-The app is intended for trusted local use. It avoids cloud APIs and remote processing. The backend sanitizes generated filenames and never executes shell strings; FFmpeg is invoked with argument arrays.
+The app is intended for trusted local use. It avoids cloud APIs and remote processing. The backend sanitizes generated
+filenames and never executes shell strings; FFmpeg is invoked with argument arrays.
 
-For a production-grade local release, add file size limits, stronger content validation, automatic retention cleanup, and optional authentication for LAN exposure.
+Phase 6A hardens network defaults, CORS, route validation, JSON limits, error mapping, and API headers. Phase 6B still
+owns upload MIME/content inspection, storage-path containment, symlink containment, and the Multer 2 migration. For a
+production-grade local release, also consider automatic retention cleanup and optional authentication for LAN exposure.
