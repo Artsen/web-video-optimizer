@@ -259,5 +259,54 @@ export default tseslint.config(
         }
       ]
     }
+  },
+  {
+    files: [
+      "apps/web/src/components/**/*.{ts,tsx}",
+      "apps/web/src/features/**/*.{ts,tsx}",
+      "apps/web/src/app/**/*.{ts,tsx}"
+    ],
+    ignores: ["apps/web/src/**/*.test.ts", "apps/web/src/**/*.test.tsx"],
+    rules: {
+      "no-restricted-globals": ["error", "fetch", "EventSource"]
+    }
+  },
+  {
+    files: ["apps/web/src/api/**/*.ts"],
+    ignores: ["apps/web/src/api/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["react", "react-dom"]
+        }
+      ]
+    }
+  },
+  {
+    files: ["apps/web/src/domain/**/*.ts"],
+    ignores: ["apps/web/src/domain/**/*.test.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: ["react", "react-dom"],
+          patterns: ["../testing/**", "../../testing/**"]
+        }
+      ],
+      "no-restricted-globals": ["error", "fetch", "EventSource"]
+    }
+  },
+  {
+    files: ["apps/web/src/**/*.{ts,tsx}"],
+    ignores: ["apps/web/src/**/*.test.ts", "apps/web/src/**/*.test.tsx", "apps/web/src/testing/**"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: ["../testing/**", "../../testing/**", "../../../testing/**"]
+        }
+      ]
+    }
   }
 );
