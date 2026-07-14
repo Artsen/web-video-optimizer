@@ -37,3 +37,39 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  media-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Real media integration tests
+        run: npm run test:integration:media
+
+      - name: Upload integration diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: media-integration-diagnostics
+          path: apps/api/integration-artifacts
+          if-no-files-found: ignore
+          retention-days: 7

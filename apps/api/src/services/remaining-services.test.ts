@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { JobDto, OptimizationSettings } from "@local-video-optimizer/contracts";
 import { normalizeOptimizationSettings } from "@local-video-optimizer/video-core";
 import type { JobEntity } from "../entities/job-entity.js";
@@ -22,6 +22,11 @@ import { PackageService } from "./package-service.js";
 import type { RecoveryReport, StatePersistenceService } from "./state-persistence-service.js";
 
 const tempDirs: string[] = [];
+const processPolicy = {
+  timeoutMs: 1_800_000,
+  terminationGracePeriodMs: 5_000,
+  maxCapturedOutputBytes: 4 * 1024 * 1024
+};
 
 class FakePersistence implements StatePersistenceService {
   saves = 0;
@@ -101,6 +106,11 @@ async function tempRoot(): Promise<string> {
   await mkdir(path.join(dir, "outputs"), { recursive: true });
   await mkdir(path.join(dir, "tmp"), { recursive: true });
   return dir;
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 function video(root: string, overrides: Partial<VideoEntity> = {}): VideoEntity {
@@ -321,7 +331,16 @@ describe("JobExecutionService", () => {
       },
       scheduler
     );
-    const service = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
+    const service = new JobExecutionService(
+      runner,
+      registry,
+      videos,
+      jobs,
+      persistence,
+      cleanup,
+      lifecycle,
+      processPolicy
+    );
     const source = video(root);
     const output = job(root, { status: "queued", progress: 0, kind: "sample" });
     videos.set(source);
@@ -347,6 +366,78 @@ describe("JobExecutionService", () => {
     expect(registry.get(output.id)).toBeUndefined();
   });
 
+  it("fails timed-out encode jobs, removes partial output, ignores late events, and releases registry entries", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const root = await tempRoot();
+      const videos = new InMemoryVideoRepository();
+      const jobs = new InMemoryJobRepository();
+      const runner = new FakeProcessRunner();
+      const registry = new InMemoryProcessRegistry();
+      const persistence = new FakePersistence();
+      const scheduler = new InMemoryJobScheduler(10);
+      const lifecycle = new JobLifecycleService();
+      const cleanup = new CleanupService(
+        videos,
+        jobs,
+        registry,
+        persistence,
+        {
+          uploadDir: path.join(root, "uploads"),
+          outputDir: path.join(root, "outputs"),
+          tmpDir: path.join(root, "tmp")
+        },
+        scheduler
+      );
+      const timeoutPolicy = { ...processPolicy, timeoutMs: 100, terminationGracePeriodMs: 25 };
+      const service = new JobExecutionService(
+        runner,
+        registry,
+        videos,
+        jobs,
+        persistence,
+        cleanup,
+        lifecycle,
+        timeoutPolicy
+      );
+      const source = video(root);
+      const output = job(root, {
+        id: "timeout",
+        status: "queued",
+        progress: 0,
+        outputPath: path.join(root, "outputs", "partial.mp4")
+      });
+      videos.set(source);
+      jobs.set(output);
+      await writeFile(output.outputPath!, "partial");
+
+      const promise = service.runEncode(output, source.storedPath);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(runner.latest().killSignals).toEqual(["SIGTERM"]);
+      await vi.advanceTimersByTimeAsync(50);
+      await flushPromises();
+      await promise;
+
+      expect(output).toMatchObject({
+        status: "failed",
+        message: "Media processing timed out after 100 ms",
+        progress: 0,
+        completedAt: expect.any(String)
+      });
+      await expect(readFile(output.outputPath!)).rejects.toThrow();
+      expect(registry.get(output.id)).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith("Force-settled timed-out media process for job timeout");
+
+      runner.latest().emitClose(0);
+      runner.latest().emitError(new Error("late"));
+      expect(output.message).toBe("Media processing timed out after 100 ms");
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("handles encode spawn errors, nonzero exits, canceled close, poster args, and mux args", async () => {
     const root = await tempRoot();
     const videos = new InMemoryVideoRepository();
@@ -368,13 +459,23 @@ describe("JobExecutionService", () => {
       },
       scheduler
     );
-    const service = new JobExecutionService(runner, registry, videos, jobs, persistence, cleanup, lifecycle);
+    const service = new JobExecutionService(
+      runner,
+      registry,
+      videos,
+      jobs,
+      persistence,
+      cleanup,
+      lifecycle,
+      processPolicy
+    );
     const source = video(root);
     videos.set(source);
 
     const failed = job(root, { id: "failed", status: "queued" });
-    service.runEncode(failed, source.storedPath);
+    const failedPromise = service.runEncode(failed, source.storedPath);
     runner.latest().emitError(new Error("spawn nope"));
+    await failedPromise;
     expect(failed).toMatchObject({ status: "failed", message: "spawn nope" });
 
     const nonzero = job(root, {
@@ -392,9 +493,10 @@ describe("JobExecutionService", () => {
     const canceled = job(root, { id: "canceled", status: "queued" });
     service.runEncode(canceled, source.storedPath);
     canceled.status = "canceled";
+    canceled.message = "Canceled by API shutdown";
     runner.latest().emitClose(0);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(canceled).toMatchObject({ progress: 0, message: "Canceled" });
+    expect(canceled).toMatchObject({ progress: 0, message: "Canceled by API shutdown" });
 
     const poster = job(root, {
       id: "poster",
@@ -493,7 +595,8 @@ describe("CaptionService", () => {
       path.join(root, "tmp"),
       undefined,
       scheduler,
-      lifecycle
+      lifecycle,
+      processPolicy
     );
 
     expect(service.createSubtitleJob("missing")).toEqual({ status: 404, error: "Video not found" });
@@ -576,7 +679,8 @@ describe("CaptionService", () => {
       path.join(root, "tmp"),
       "model.bin",
       scheduler,
-      lifecycle
+      lifecycle,
+      processPolicy
     );
     const source = video(root);
     videos.set(source);

@@ -68,6 +68,12 @@ Process creation is behind `ProcessRunner`, with the Node implementation isolate
 runtime-scoped `ProcessRegistry`. Tool-specific behavior is behind infrastructure adapters for FFprobe, FFmpeg encoder
 capability detection, whisper.cpp resolution, yt-dlp importing, and desktop file reveal behavior.
 
+Short command-style tool calls run through `CommandRunner`, which supervises the child process, enforces
+`TOOL_COMMAND_TIMEOUT_MS`, captures stdout with a hard byte limit, and keeps only a bounded stderr tail for diagnostics.
+Long media workflows use the same process-supervision primitive with `MEDIA_PROCESS_TIMEOUT_MS`. Timed-out media
+processes receive `SIGTERM`, then `SIGKILL` after `PROCESS_KILL_GRACE_PERIOD_MS`, and finally force-settle so scheduler
+slots cannot remain occupied forever. Captured process output is bounded by `MAX_CAPTURED_PROCESS_OUTPUT_BYTES`.
+
 Process-backed media jobs are admitted through a runtime-scoped bounded FIFO scheduler. `MAX_CONCURRENT_MEDIA_JOBS`
 controls the number of concurrent media slots and defaults to `1`, because local video encoding is CPU-intensive.
 Encode, sample, poster, subtitle generation, and subtitle mux jobs consume scheduler slots. Website package jobs remain
@@ -158,14 +164,16 @@ does not run after unrecoverable manifest corruption.
 The production runtime exposes an API-private `shutdown()` operation. Routes do not expose shutdown controls. Shutdown
 stops scheduler acceptance, cancels queued callbacks, marks queued/running jobs as canceled with `Canceled by API
 shutdown`, terminates registered media processes with `SIGTERM`, waits up to `SHUTDOWN_GRACE_PERIOD_MS`, then sends
-`SIGKILL` where supported for remaining processes. Final state is saved and flushed before shutdown resolves.
+`SIGKILL` where supported for remaining processes. Final state is saved and flushed before shutdown resolves. On
+Windows, external signal termination of a child Node process behaves more like process termination than POSIX graceful
+shutdown, so restart recovery remains the source of truth for interrupted jobs in that path.
 
 `apps/api/src/server-lifecycle.ts` retains the HTTP server handle and installs one shared `SIGINT`/`SIGTERM` shutdown
 path. The server stops accepting new connections, closes idle connections where Node supports it, waits for runtime
 shutdown, and reports shutdown failures with a nonzero exit code.
 
-Remaining Phase 5C work includes process-output limits, normal execution timeouts, retry/resume policy, stronger
-process containment, and automated real-media integration coverage.
+Phase 5C adds process-output limits, normal execution timeouts, stronger process containment, and automated real-media
+integration coverage. Retry/resume policy is intentionally still future work.
 
 Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
 public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output

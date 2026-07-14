@@ -18,6 +18,10 @@ describe("parseApiConfig", () => {
       uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
       maxConcurrentMediaJobs: 1,
       shutdownGracePeriodMs: 15000,
+      mediaProcessTimeoutMs: 1800000,
+      toolCommandTimeoutMs: 60000,
+      processKillGracePeriodMs: 5000,
+      maxCapturedProcessOutputBytes: 4194304,
       ytDlpJsRuntime: "node:C:\\Program Files\\nodejs\\node.exe"
     });
   });
@@ -72,6 +76,36 @@ describe("parseApiConfig", () => {
     expect(() => parseApiConfig({ SHUTDOWN_GRACE_PERIOD_MS: "soon" }, options)).toThrow(
       "Invalid SHUTDOWN_GRACE_PERIOD_MS: soon"
     );
+  });
+
+  it("accepts and validates process containment values", () => {
+    expect(
+      parseApiConfig(
+        {
+          MEDIA_PROCESS_TIMEOUT_MS: "100",
+          TOOL_COMMAND_TIMEOUT_MS: "200",
+          PROCESS_KILL_GRACE_PERIOD_MS: "300",
+          MAX_CAPTURED_PROCESS_OUTPUT_BYTES: "400"
+        },
+        options
+      )
+    ).toMatchObject({
+      mediaProcessTimeoutMs: 100,
+      toolCommandTimeoutMs: 200,
+      processKillGracePeriodMs: 300,
+      maxCapturedProcessOutputBytes: 400
+    });
+
+    for (const variable of [
+      "MEDIA_PROCESS_TIMEOUT_MS",
+      "TOOL_COMMAND_TIMEOUT_MS",
+      "PROCESS_KILL_GRACE_PERIOD_MS",
+      "MAX_CAPTURED_PROCESS_OUTPUT_BYTES"
+    ]) {
+      for (const value of ["0", "-1", "1.5", "soon", ""]) {
+        expect(() => parseApiConfig({ [variable]: value }, options)).toThrow(`Invalid ${variable}: ${value}`);
+      }
+    }
   });
 
   it("derives storage paths from an explicit storage root", () => {

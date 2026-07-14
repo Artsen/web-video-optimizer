@@ -12,6 +12,10 @@ export type ApiConfig = {
   uploadFileSizeLimitBytes: number;
   maxConcurrentMediaJobs: number;
   shutdownGracePeriodMs: number;
+  mediaProcessTimeoutMs: number;
+  toolCommandTimeoutMs: number;
+  processKillGracePeriodMs: number;
+  maxCapturedProcessOutputBytes: number;
   whisperCppBin?: string;
   whisperCppModel?: string;
   ytDlpBin?: string;
@@ -23,6 +27,15 @@ export type ParseApiConfigOptions = {
   nodeExecPath: string;
 };
 
+function parsePositiveInteger(source: Record<string, string | undefined>, name: string, defaultValue: string): number {
+  const raw = source[name] ?? defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${raw}`);
+  }
+  return parsed;
+}
+
 export function parseApiConfig(source: Record<string, string | undefined>, options: ParseApiConfigOptions): ApiConfig {
   const rawPort = source.PORT ?? "4000";
   const port = Number(rawPort);
@@ -30,17 +43,12 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     throw new Error(`Invalid PORT: ${rawPort}`);
   }
 
-  const rawMaxConcurrentMediaJobs = source.MAX_CONCURRENT_MEDIA_JOBS ?? "1";
-  const maxConcurrentMediaJobs = Number(rawMaxConcurrentMediaJobs);
-  if (!Number.isInteger(maxConcurrentMediaJobs) || maxConcurrentMediaJobs <= 0) {
-    throw new Error(`Invalid MAX_CONCURRENT_MEDIA_JOBS: ${rawMaxConcurrentMediaJobs}`);
-  }
-
-  const rawShutdownGracePeriodMs = source.SHUTDOWN_GRACE_PERIOD_MS ?? "15000";
-  const shutdownGracePeriodMs = Number(rawShutdownGracePeriodMs);
-  if (!Number.isInteger(shutdownGracePeriodMs) || shutdownGracePeriodMs <= 0) {
-    throw new Error(`Invalid SHUTDOWN_GRACE_PERIOD_MS: ${rawShutdownGracePeriodMs}`);
-  }
+  const maxConcurrentMediaJobs = parsePositiveInteger(source, "MAX_CONCURRENT_MEDIA_JOBS", "1");
+  const shutdownGracePeriodMs = parsePositiveInteger(source, "SHUTDOWN_GRACE_PERIOD_MS", "15000");
+  const mediaProcessTimeoutMs = parsePositiveInteger(source, "MEDIA_PROCESS_TIMEOUT_MS", "1800000");
+  const toolCommandTimeoutMs = parsePositiveInteger(source, "TOOL_COMMAND_TIMEOUT_MS", "60000");
+  const processKillGracePeriodMs = parsePositiveInteger(source, "PROCESS_KILL_GRACE_PERIOD_MS", "5000");
+  const maxCapturedProcessOutputBytes = parsePositiveInteger(source, "MAX_CAPTURED_PROCESS_OUTPUT_BYTES", "4194304");
 
   const storageRoot = source.STORAGE_ROOT ?? path.resolve(options.cwd, "../../data");
 
@@ -56,6 +64,10 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
     maxConcurrentMediaJobs,
     shutdownGracePeriodMs,
+    mediaProcessTimeoutMs,
+    toolCommandTimeoutMs,
+    processKillGracePeriodMs,
+    maxCapturedProcessOutputBytes,
     whisperCppBin: source.WHISPER_CPP_BIN,
     whisperCppModel: source.WHISPER_CPP_MODEL,
     ytDlpBin: source.YT_DLP_BIN,

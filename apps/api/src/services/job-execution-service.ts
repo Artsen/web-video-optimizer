@@ -2,8 +2,10 @@ import { stat } from "node:fs/promises";
 import { buildFfmpegArgs } from "@local-video-optimizer/video-core";
 import type { OptimizationSettings } from "@local-video-optimizer/contracts";
 import type { JobEntity } from "../entities/job-entity.js";
+import type { ProcessExecutionPolicy } from "../infrastructure/processes/process-execution-policy.js";
 import type { ProcessRegistry } from "../infrastructure/processes/process-registry.js";
 import type { ProcessRunner } from "../infrastructure/processes/process-runner.js";
+import { superviseProcess } from "../infrastructure/processes/process-supervisor.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { CleanupService } from "./cleanup-service.js";
 import type { JobLifecycle } from "./job-lifecycle-service.js";
@@ -38,7 +40,8 @@ export class JobExecutionService implements JobExecutor {
     private readonly jobs: JobRepository,
     private readonly persistence: StatePersistenceService,
     private readonly cleanup: CleanupService,
-    private readonly lifecycle: JobLifecycle
+    private readonly lifecycle: JobLifecycle,
+    private readonly mediaPolicy: ProcessExecutionPolicy
   ) {}
 
   runEncode(job: JobEntity, inputPath: string, durationLimitSeconds?: number): Promise<void> {
@@ -53,7 +56,7 @@ export class JobExecutionService implements JobExecutor {
       "-nostats",
       ...buildFfmpegArgs(inputPath, job.outputPath!, job.settings, durationLimitSeconds)
     ];
-    const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
+    const child = this.processRunner.spawn("ffmpeg", args, { windowsHide: true });
     this.processRegistry.set(job.id, child);
 
     child.stdout?.on("data", (chunk) => {
@@ -80,7 +83,6 @@ export class JobExecutionService implements JobExecutor {
       onClose: async (code) => {
         if (job.status === "canceled") {
           job.progress = 0;
-          job.message = "Canceled";
           await this.persistence.save();
           return;
         }
@@ -131,7 +133,7 @@ export class JobExecutionService implements JobExecutor {
       "82",
       job.outputPath!
     ];
-    const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
+    const child = this.processRunner.spawn("ffmpeg", args, { windowsHide: true });
     this.processRegistry.set(job.id, child);
     job.ffmpegCommand = commandPreview(args);
 
@@ -144,7 +146,6 @@ export class JobExecutionService implements JobExecutor {
       },
       onClose: async (code) => {
         if (job.status === "canceled") {
-          job.message = "Canceled";
           await this.persistence.save();
           return;
         }
@@ -180,7 +181,7 @@ export class JobExecutionService implements JobExecutor {
         job.settings.outputContainer
       )
     ];
-    const child = this.processRunner["spawn"]("ffmpeg", args, { windowsHide: true });
+    const child = this.processRunner.spawn("ffmpeg", args, { windowsHide: true });
     this.processRegistry.set(job.id, child);
 
     child.stdout?.on("data", (chunk) => {
@@ -206,7 +207,6 @@ export class JobExecutionService implements JobExecutor {
       onClose: async (code) => {
         if (job.status === "canceled") {
           job.progress = 0;
-          job.message = "Canceled";
           await this.persistence.save();
           return;
         }
@@ -243,25 +243,30 @@ export class JobExecutionService implements JobExecutor {
       onClose: (code: number | null) => Promise<void>;
     }
   ): Promise<void> {
-    let settled = false;
-    const settle = async (handler: () => Promise<void>, resolve: () => void) => {
-      if (settled) return;
-      settled = true;
-      this.processRegistry.delete(job.id);
-      try {
-        await handler();
-      } finally {
-        resolve();
+    const supervisor = superviseProcess(child, "ffmpeg", this.mediaPolicy, {
+      onForceSettle: () => {
+        console.warn(`Force-settled timed-out media process for job ${job.id}`);
       }
-    };
+    });
 
-    return new Promise((resolve) => {
-      child.on("error", (error) => {
-        void settle(() => handlers.onError(error), resolve);
-      });
-      child.on("close", (code) => {
-        void settle(() => handlers.onClose(code), resolve);
-      });
+    return supervisor.promise.then(async (result) => {
+      this.processRegistry.delete(job.id);
+      if (result.kind === "timeout") {
+        if (job.status === "canceled") {
+          await this.persistence.save();
+          return;
+        }
+        if (this.lifecycle.fail(job, `Media processing timed out after ${this.mediaPolicy.timeoutMs} ms`)) {
+          await this.cleanup.removeJobArtifacts(job);
+          await this.persistence.save();
+        }
+        return;
+      }
+      if (result.kind === "error") {
+        await handlers.onError(result.error);
+        return;
+      }
+      await handlers.onClose(result.code);
     });
   }
 }
