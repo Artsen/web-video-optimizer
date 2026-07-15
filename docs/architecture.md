@@ -279,3 +279,43 @@ Phase 6A hardens network defaults, CORS, route validation, JSON limits, error ma
 upload admission, MIME/extension spoofing resistance, storage-path containment, symlink rejection, and the Multer 2
 migration. For a production-grade local release, also consider automatic retention cleanup and optional authentication
 for LAN exposure.
+
+## Frontend Application Boundary
+
+Phase 7A makes the web entrypoint a bootstrap file. `apps/web/src/main.tsx` creates production dependencies once, imports
+global CSS, and renders `App`.
+
+The frontend now has explicit seams:
+
+- `api/api-client.ts` owns JSON requests, multipart upload, empty responses, and safe API error parsing.
+- `api/urls.ts` owns media, download, sidecar, and EventSource URL construction.
+- `api/job-events.ts` owns browser `EventSource` construction and terminal cleanup.
+- `app/App.tsx` owns application orchestration through injected dependencies.
+- `domain/*` owns pure selectors, formatting helpers, and job presentation helpers.
+- `components/ui/*` owns reusable visual primitives while preserving existing class names.
+- `features/poster/PosterLightbox.tsx` owns poster lightbox rendering and local interactions.
+
+Components receive API and job-event behavior through `AppDependencies`; production code does not import testing
+fixtures. Direct `fetch` and `EventSource` usage is restricted to low-level API/event modules by lint rules.
+
+Phase 7A intentionally avoids Playwright and browser screenshot comparison. Browser media playback, responsive rendering,
+and visual equivalence remain manual smoke gates until Phase 7B adds dedicated browser coverage.
+
+## Phase 7A Frontend Application Boundary
+
+The web app now uses a small bootstrap in `apps/web/src/main.tsx`; it creates the browser API client, the browser job-event adapter, and renders the React application with injected dependencies. `App.tsx` is intentionally a thin top-level coordinator that chooses the active workflow view and renders the shared shell.
+
+Frontend API access is isolated under `apps/web/src/api/`. Feature components do not call `fetch`, construct mutation URLs, or create `EventSource` instances. API error parsing is centralized in `api-error.ts`, and media/download URL construction remains in `urls.ts`.
+
+Cross-feature orchestration lives in `apps/web/src/app/useVideoOptimizerApp.tsx`. It owns history/capability loading, active-video selection, upload/import workflows, job creation, job-event subscription, history cleanup, global errors, and state that genuinely spans multiple features. Static presets and initial settings live in `app-config.tsx`.
+
+Major visual workflows are separated into feature components:
+
+- `features/prepare`: upload/dropzone/source details/subtitle availability
+- `features/outputs`: current jobs, output cards, package panel
+- `features/custom`: preset selection, target-size controls, optimization settings form
+- `features/compare`: theatre comparison view plus synchronized playback hook
+- `features/captions`: subtitle theatre/editor
+- `features/poster`: poster lightbox
+
+Pure derivations remain in selector/presenter modules rather than being rebuilt inside views. Phase 7B should add browser E2E coverage and can continue reducing the controller by moving more feature-local workflows into feature hooks.

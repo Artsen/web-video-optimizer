@@ -304,3 +304,19 @@ For best website coverage, export at least one MP4/H.264 fallback. The one-click
 ## Current Scope
 
 The first implementation targets practical H.264, AV1, and VP9 CRF workflows. Advanced features such as batch processing, visual quality scoring, sample-encode estimation, and browser-only WASM processing are intentionally left for future iterations.
+
+## Frontend Tests
+
+The web workspace uses Vitest with jsdom and React Testing Library for frontend behavior tests:
+
+```powershell
+npm.cmd run test:run --workspace apps/web
+npm.cmd run test:coverage --workspace apps/web
+```
+
+The browser app keeps network calls behind the typed API client and job progress behind the job-event adapter. Manual
+browser smoke is still required for real media playback and visual equivalence.
+
+### Frontend Architecture
+
+The browser app uses a small React bootstrap, injected API/event dependencies, feature-level workflow components, and centralized API/error/event boundaries. Frontend tests cover API contracts, event subscriptions, selectors, feature components, and root workflow behavior.

@@ -254,3 +254,32 @@ The real symlink storage-boundary unit test is platform-conditional:
 - YouTube importing through yt-dlp
 - Live-network YouTube importing through yt-dlp
 - Browser-driven upload/download smoke automation
+
+## Phase 7A Frontend Tests
+
+The web workspace now runs Vitest in `jsdom` with React Testing Library and `@testing-library/jest-dom`.
+
+Coverage includes:
+
+- API-client consumer-contract tests for frontend-used request families.
+- `/api/videos/:id/pair` compatibility coverage that verifies POST, JSON content type, and the current settings body.
+- Centralized structured and plain-text API error parsing.
+- Fake job-event tests for EventSource URL construction, running updates, terminal cleanup, invalid payloads, errors,
+  manual close, and duplicate subscription replacement.
+- Pure selector/presenter tests for current-video jobs, package candidates, output presence, savings, formatting,
+  subtitle cleanup, and embed markup.
+- Behavioral React tests for initial load, upload success/failure, Optimize For Website pair requests, job-event updates,
+  and poster lightbox controls.
+
+`jsdom` does not validate real codec playback, responsive layout, browser CORS behavior, or actual media seeking. Those
+remain required manual browser smoke checks for Phase 7A.
+
+## Phase 7A Frontend Test Coverage
+
+Frontend tests now include API-client consumer-contract tests, job-event adapter tests, selector/formatter tests, feature component tests, the synchronized-playback hook tests, the poster-lightbox test, and a smaller root App integration suite.
+
+The API-client tests verify request methods, JSON bodies, multipart upload behavior, structured/plain-text error handling, and the `/api/videos/:id/pair` contract with the current optimization settings body. Job-event tests verify update forwarding, terminal cleanup, invalid payload handling, error cleanup, and duplicate subscription replacement.
+
+Feature tests exercise upload/file-selection behavior, current-job progress/cancellation rendering, poster lightbox controls, and media synchronization behavior without requiring real media decoding. jsdom does not decode video/audio, so production-browser smoke testing is still required for playback, drag-and-drop feel, lightbox gestures, captions preview, and browser console validation.
+
+Real-media integration remains an API-level regression suite and should be run twice consecutively for Phase 7A review because recent phases exposed timing-sensitive shutdown/recovery behavior.
