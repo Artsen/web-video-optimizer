@@ -4,6 +4,8 @@ import type {
   JobDto,
   OptimizationSettings,
   PackageMetadata,
+  StorageCleanupResultDto,
+  StorageStatusDto,
   VideoRecordDto
 } from "@local-video-optimizer/contracts";
 import { parseApiError } from "./api-error";
@@ -20,6 +22,8 @@ export type PairJobsResponse = {
 
 export interface VideoOptimizerApi {
   getCapabilities(): Promise<Capabilities>;
+  getStorageStatus(): Promise<StorageStatusDto>;
+  cleanupStorage(): Promise<StorageCleanupResultDto>;
   getHistory(): Promise<HistorySnapshot>;
   uploadVideo(file: File): Promise<VideoRecordDto>;
   importVideoUrl(url: string): Promise<VideoRecordDto>;
@@ -67,6 +71,8 @@ export function createVideoOptimizerApi({ baseUrl, fetchFn = fetch }: ClientOpti
 
   return {
     getCapabilities: () => jsonRequest<Capabilities>("/api/capabilities"),
+    getStorageStatus: () => jsonRequest<StorageStatusDto>("/api/storage"),
+    cleanupStorage: () => jsonRequest<StorageCleanupResultDto>("/api/storage/cleanup", { method: "POST" }),
     getHistory: () => jsonRequest<HistorySnapshot>("/api/history"),
     async uploadVideo(file) {
       const body = new FormData();

@@ -5,11 +5,13 @@ import { App } from "./App";
 import type { AppDependencies } from "./app-dependencies";
 import type { VideoOptimizerApi } from "../api/api-client";
 import type { JobEvents } from "../api/job-events";
-import { capabilities, historySnapshot, job, videoRecord } from "../testing/fixtures";
+import { capabilities, historySnapshot, job, storageStatus, videoRecord } from "../testing/fixtures";
 
 function createApi(overrides: Partial<VideoOptimizerApi> = {}): VideoOptimizerApi {
   return {
     getCapabilities: vi.fn().mockResolvedValue(capabilities({ whisperCpp: true, whisperModel: true })),
+    getStorageStatus: vi.fn().mockResolvedValue(storageStatus()),
+    cleanupStorage: vi.fn().mockResolvedValue({ removedBytes: 250_000, removedFileCount: 1, storage: storageStatus() }),
     getHistory: vi.fn().mockResolvedValue(historySnapshot()),
     uploadVideo: vi.fn().mockResolvedValue(videoRecord()),
     importVideoUrl: vi.fn().mockResolvedValue(videoRecord({ id: "video-url" })),
@@ -83,6 +85,7 @@ describe("App behavior", () => {
     expect(await screen.findByText("Waiting For A Source")).toBeInTheDocument();
     expect(api.getCapabilities).toHaveBeenCalledTimes(1);
     expect(api.getHistory).toHaveBeenCalledTimes(1);
+    expect(api.getStorageStatus).toHaveBeenCalledTimes(1);
   });
 
   it("uploads a selected file, activates the source, and displays metadata", async () => {
@@ -205,6 +208,62 @@ describe("App behavior", () => {
     await user.click(screen.getByRole("button", { name: "Delete file" }));
 
     expect(api.deleteHistory).toHaveBeenCalledWith(["history-video"], []);
+  });
+
+  it("shows storage pressure, usage details, and temporary cleanup feedback", async () => {
+    const user = userEvent.setup();
+    const api = createApi({
+      getStorageStatus: vi.fn().mockResolvedValue(
+        storageStatus({
+          pressure: "warning",
+          reservedBytes: 500_000,
+          availableBytes: undefined,
+          configuredMaxBytes: 20_000_000,
+          cleanup: { staleTemporaryBytes: 1_500_000, staleTemporaryFileCount: 2 }
+        })
+      ),
+      cleanupStorage: vi.fn().mockResolvedValue({
+        removedBytes: 1_500_000,
+        removedFileCount: 2,
+        storage: storageStatus({ cleanup: { staleTemporaryBytes: 0, staleTemporaryFileCount: 0 } })
+      })
+    });
+    renderApp(api);
+
+    await user.click(await screen.findByRole("button", { name: /manage library/i }));
+
+    expect(
+      screen.getByText("Storage is getting low. Existing history is preserved until you delete it.")
+    ).toBeInTheDocument();
+    expect(screen.getByText("Unknown")).toBeInTheDocument();
+    expect(screen.getByText("488.3 KB")).toBeInTheDocument();
+    expect(screen.getByText("19.1 MB")).toBeInTheDocument();
+    expect(screen.getByText(/Reclaimable temporary data: 1.4 MB across 2 file/)).toBeInTheDocument();
+    expect(screen.queryByText(/D:\\/i)).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /clean temporary files only/i }));
+
+    expect(api.cleanupStorage).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText("Reclaimed 2 temporary file(s).")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /clean temporary files only/i })).toBeDisabled();
+  });
+
+  it("surfaces storage cleanup errors readably", async () => {
+    const user = userEvent.setup();
+    const api = createApi({
+      getStorageStatus: vi
+        .fn()
+        .mockResolvedValue(
+          storageStatus({ pressure: "critical", cleanup: { staleTemporaryBytes: 750_000, staleTemporaryFileCount: 1 } })
+        ),
+      cleanupStorage: vi.fn().mockRejectedValue(new Error("Not enough free storage space to clean temporary files."))
+    });
+    renderApp(api);
+
+    await user.click(await screen.findByRole("button", { name: /manage library/i }));
+    expect(screen.getByText(/Storage is critically low/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /clean temporary files only/i }));
+    expect(await screen.findByText("Not enough free storage space to clean temporary files.")).toBeInTheDocument();
   });
 
   it("loads and saves caption edits", async () => {

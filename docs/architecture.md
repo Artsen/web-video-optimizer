@@ -270,6 +270,46 @@ opened handle is `fstat` checked, but Node does not provide one cross-platform `
 The implementation therefore uses lexical checks, `lstat`, symlink rejection, `realpath`, and handle/stat validation
 where supported and tests the real symlink case on Ubuntu CI.
 
+## Storage Capacity And Housekeeping
+
+Phase 8A adds capacity awareness without changing the durable-history model. `NodeStatfsCapacityProvider` is the only
+production adapter that asks the filesystem for available and total bytes. It is injected into the production runtime,
+so routes and application services do not import `statfs` directly and tests can use deterministic fakes.
+
+`ManagedStorageInventoryService` measures regular files under the managed `uploads`, `outputs`, `tmp`, and
+`tmp/upload-staging` areas. It does not follow symlinks, does not scan the repository, and does not expose filenames or
+paths. The public DTO reports aggregate byte and file counts plus stale temporary totals only.
+
+`StoragePolicyService` combines filesystem capacity, managed usage, runtime reservations, and configuration:
+
+- `MIN_FREE_STORAGE_BYTES` is a hard reserve that must remain after new work is admitted.
+- `MAX_MANAGED_STORAGE_BYTES=0` means no app-managed quota; positive values cap managed uploads, outputs, temp files,
+  and active reservations.
+- Pressure is `critical` when available bytes are at or below the reserve or managed usage reaches the configured quota.
+- Pressure is `warning` when available bytes are within twice the reserve or managed usage reaches 80% of the quota.
+
+Uploads, URL imports, encode/sample/poster/subtitle/mux jobs, and package creation estimate required bytes before
+admission. Runtime-scoped reservations prevent obvious concurrent overcommit and are released on success, failure,
+cancellation, request abort, or shutdown. Pair jobs first check the combined allocation so the UI does not receive one
+half of a pair after the other half was rejected for capacity.
+
+Capacity failures use `507 INSUFFICIENT_STORAGE` with operation-specific safe messages. Configured upload-size failures
+remain `413 UPLOAD_TOO_LARGE`. Process-backed disk-full signals are mapped from `ENOSPC` or bounded stderr patterns,
+then partial artifacts are removed where possible without hiding cleanup failures in public responses.
+
+`StorageHousekeepingService` is runtime-scoped. It runs once after storage and manifest initialization, then periodically
+with `HOUSEKEEPING_INTERVAL_MS`; overlapping runs are skipped, timers are cleared during shutdown, and the timer is
+`unref()`ed. Housekeeping and `POST /api/storage/cleanup` remove stale files from `tmp` and `tmp/upload-staging` only.
+They do not automatically delete referenced source uploads, completed outputs, `manifest.json`, or `manifest.json.bak`.
+
+Manifest writes remain fail-safe through the file manifest store: writes stage a temporary manifest in the same
+directory, keep the last valid primary as backup, and surface persistence failures. Phase 8A reserves small manifest
+overhead with storage-producing operations but does not introduce a durable retention policy.
+
+The browser reads storage status through the typed API client, not direct `fetch`. The Library storage panel presents
+managed usage, available disk space, quota, pressure copy, area breakdowns, and temporary cleanup. It never receives
+private storage paths, filenames, hashes, or platform device identifiers.
+
 ## Security And Privacy
 
 The app is intended for trusted local use. It avoids cloud APIs and remote processing. The backend sanitizes generated

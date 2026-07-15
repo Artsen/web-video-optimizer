@@ -132,6 +132,11 @@ describe("real media compiled API integration", () => {
 
       const video = await uploadVideo(harness, sourcePath, "source.mp4");
       expect(video.metadata.videoCodec).toBeTruthy();
+      const storageBefore = await jsonRequest<{ managedBytes: number; areas: { uploads: { fileCount: number } } }>(
+        `${harness.baseUrl}/api/storage`
+      );
+      expect(storageBefore.managedBytes).toBeGreaterThanOrEqual(0);
+      expect(storageBefore.areas.uploads.fileCount).toBeGreaterThanOrEqual(1);
       const duplicate = await uploadVideo(harness, sourcePath, "copy.mp4");
       expect(duplicate.id).toBe(video.id);
 
@@ -188,6 +193,12 @@ describe("real media compiled API integration", () => {
 
       const history = await jsonRequest<HistorySnapshot>(`${harness.baseUrl}/api/history`);
       expect(JSON.stringify(history)).not.toMatch(/storedPath|outputPath|sidecarPath|sourceHash/);
+      const cleanup = await jsonRequest<{ removedBytes: number; removedFileCount: number; storage: unknown }>(
+        `${harness.baseUrl}/api/storage/cleanup`,
+        { method: "POST", body: JSON.stringify({}) }
+      );
+      expect(cleanup.removedBytes).toBeGreaterThanOrEqual(0);
+      expect(cleanup.removedFileCount).toBeGreaterThanOrEqual(0);
 
       await expect(fetch(`${harness.baseUrl}/api/jobs/${job.id}`, { method: "DELETE" })).resolves.toMatchObject({
         status: 204
@@ -241,6 +252,20 @@ describe("real media compiled API integration", () => {
       expect(await directoryEntries(path.join(storageRoot, "tmp", "upload-staging"))).toEqual([]);
       expect(await directoryEntries(path.join(storageRoot, "uploads"))).toEqual([]);
     });
+
+    await withApi(
+      "capacity-reject",
+      { MIN_FREE_STORAGE_BYTES: String(Number.MAX_SAFE_INTEGER) },
+      async (harness, root) => {
+        const sourcePath = path.join(root, "source.mp4");
+        const storageRoot = path.join(root, "data");
+        await generateAvFixture(sourcePath, 1);
+
+        await expectUploadFailure(harness, sourcePath, "source.mp4", 507, "INSUFFICIENT_STORAGE");
+        expect(await directoryEntries(path.join(storageRoot, "tmp", "upload-staging"))).toEqual([]);
+        expect(await directoryEntries(path.join(storageRoot, "uploads"))).toEqual([]);
+      }
+    );
   });
 
   it("creates a WebM VP9 output and supports suffix byte ranges", async () => {

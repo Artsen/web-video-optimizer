@@ -11,6 +11,11 @@ test("uploads and optimizes a tiny real video through the compiled stack @real-s
 
   await page.goto("/");
   await expect(page.getByText("No uploads yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Manage Library" }).click();
+  await expect(page.getByRole("heading", { name: "Storage" })).toBeVisible();
+  await expect(page.getByText(/managed by this app/)).toBeVisible();
+  await page.getByRole("button", { name: "Workflow" }).click();
+
   await page.getByLabel("Select Video").setInputFiles(videoPath);
   await expect(page.getByLabel("Source filename")).toHaveValue("tiny-e2e-video.mp4");
   await expect(page.getByText(/Source is .*160 x 90/)).toBeVisible();
@@ -42,6 +47,13 @@ test("uploads and optimizes a tiny real video through the compiled stack @real-s
   expect((await outputDownload).suggestedFilename()).not.toHaveLength(0);
 
   await page.getByRole("button", { name: "Manage Library" }).click();
+  await expect(page.getByText(/available on disk/)).toBeVisible();
+  const cleanupButton = page.getByRole("button", { name: "Clean temporary files only" });
+  await expect(cleanupButton).toBeVisible();
+  if (await cleanupButton.isEnabled()) {
+    await cleanupButton.click();
+    await expect(page.getByText(/Reclaimed .* temporary file/)).toBeVisible();
+  }
   await page.getByRole("button", { name: "Delete file" }).click();
   await expect(page.getByText("No uploaded files yet.")).toBeVisible();
   await assertNoBrowserErrors();

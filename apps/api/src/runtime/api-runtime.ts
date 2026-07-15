@@ -5,7 +5,9 @@ import type {
   JobKind,
   OptimizationSettings,
   VideoMetadata,
-  VideoRecordDto
+  VideoRecordDto,
+  StorageCleanupResultDto,
+  StorageStatusDto
 } from "@local-video-optimizer/contracts";
 import type { OpenedStoredFile, StorageArea } from "../storage/storage-boundary.js";
 
@@ -30,6 +32,8 @@ export type CaptionPayload = {
 export interface ApiRuntime {
   initialize(): Promise<void>;
   getCapabilities(): Promise<Capabilities>;
+  getStorageStatus(): Promise<StorageStatusDto>;
+  cleanupStorage(): Promise<StorageCleanupResultDto>;
   getHistory(): HistorySnapshot;
   createVideoFromUpload(file: UploadedVideoFile): Promise<VideoRecordDto>;
   createVideoFromUrl(url: string): Promise<VideoRecordDto>;
@@ -39,15 +43,18 @@ export interface ApiRuntime {
   getVideoDownload(id: string): StreamDescriptor | undefined;
   renameVideo(id: string, originalName: string): Promise<VideoRecordDto | undefined>;
   deleteVideo(id: string): Promise<boolean>;
-  createOptimizationJob(videoId: string, settings: Partial<OptimizationSettings>): { status: 200 | 202; job?: JobDto };
+  createOptimizationJob(
+    videoId: string,
+    settings: Partial<OptimizationSettings>
+  ): Promise<{ status: 200 | 202; job?: JobDto }>;
   createSampleJob(
     videoId: string,
     settings: Partial<OptimizationSettings>,
     sampleSeconds?: unknown
-  ): { status: 200 | 202; job?: JobDto };
-  createPosterJob(videoId: string, atSeconds?: unknown): JobDto | undefined;
-  createSubtitleJob(videoId: string): { status: 200 | 202 | 400 | 404; job?: JobDto; error?: string };
-  createPairJobs(videoId: string): { jobs: JobDto[] } | undefined;
+  ): Promise<{ status: 200 | 202; job?: JobDto }>;
+  createPosterJob(videoId: string, atSeconds?: unknown): Promise<JobDto | undefined>;
+  createSubtitleJob(videoId: string): Promise<{ status: 200 | 202 | 400 | 404; job?: JobDto; error?: string }>;
+  createPairJobs(videoId: string): Promise<{ jobs: JobDto[] } | undefined>;
   createPackageJob(videoId: string, body: unknown): Promise<{ status: 201 | 400 | 404; job?: JobDto; error?: string }>;
   deleteHistory(videoIds: string[], jobIds: string[]): Promise<HistorySnapshot>;
   getJob(id: string): JobDto | undefined;
@@ -61,7 +68,7 @@ export interface ApiRuntime {
   createMuxSubtitleJob(
     videoJobId: string,
     subtitleJobId: string
-  ): { status: 202 | 400 | 404; job?: JobDto; error?: string };
+  ): Promise<{ status: 202 | 400 | 404; job?: JobDto; error?: string }>;
   revealJob(id: string): Promise<boolean>;
   deleteJob(id: string): Promise<boolean>;
 }

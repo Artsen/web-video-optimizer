@@ -10,6 +10,13 @@ import type { FileRevealer } from "../infrastructure/desktop/file-revealer.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { StreamDescriptor } from "../runtime/api-runtime.js";
 import type { StorageBoundary } from "../storage/storage-boundary.js";
+import type { StoragePolicyService } from "../storage/storage-policy-service.js";
+import type { StorageReservation } from "../storage/storage-reservations.js";
+import {
+  estimateEncodeAllocation,
+  estimatePosterAllocation,
+  estimateSampleAllocation
+} from "../storage/allocation-estimates.js";
 import type { JobScheduler } from "../scheduling/job-scheduler.js";
 import type { CleanupService } from "./cleanup-service.js";
 import type { JobExecutor } from "./job-execution-service.js";
@@ -29,8 +36,11 @@ export class JobService {
     private readonly fileRevealer: FileRevealer,
     private readonly scheduler: JobScheduler,
     private readonly lifecycle: JobLifecycle,
-    private readonly storage?: StorageBoundary
+    private readonly storage?: StorageBoundary,
+    private readonly storagePolicy?: StoragePolicyService
   ) {}
+
+  private readonly reservations = new Map<string, StorageReservation>();
 
   get(id: string): JobDto | undefined {
     const job = this.jobs.get(id);
@@ -40,13 +50,22 @@ export class JobService {
   createOptimizationJob(
     videoId: string,
     rawSettings: Partial<OptimizationSettings>
-  ): { status: 200 | 202; job?: JobDto } {
+  ): Promise<{ status: 200 | 202; job?: JobDto }> {
+    return this.createOptimizationJobInternal(videoId, rawSettings);
+  }
+
+  private async createOptimizationJobInternal(
+    videoId: string,
+    rawSettings: Partial<OptimizationSettings>
+  ): Promise<{ status: 200 | 202; job?: JobDto }> {
     const video = this.videos.get(videoId);
     if (!video) return { status: 202 };
     const settings = normalizeOptimizationSettings(rawSettings ?? {});
     const existing = this.reusableJob(video, "encode", settings);
     if (existing) return { status: existing.status === "completed" ? 200 : 202, job: this.publicJob(existing) };
+    const reservation = await this.reserve("encode", estimateEncodeAllocation(video, settings));
     const job = this.createEncodeJob(video, settings, "encode");
+    this.trackReservation(job.id, reservation);
     this.enqueueMediaJob(job, () => this.execution.runEncode(job, video.storedPath));
     return { status: 202, job: this.publicJob(job) };
   }
@@ -55,7 +74,15 @@ export class JobService {
     videoId: string,
     rawSettings: Partial<OptimizationSettings>,
     rawSampleSeconds?: unknown
-  ): { status: 200 | 202; job?: JobDto } {
+  ): Promise<{ status: 200 | 202; job?: JobDto }> {
+    return this.createSampleJobInternal(videoId, rawSettings, rawSampleSeconds);
+  }
+
+  private async createSampleJobInternal(
+    videoId: string,
+    rawSettings: Partial<OptimizationSettings>,
+    rawSampleSeconds?: unknown
+  ): Promise<{ status: 200 | 202; job?: JobDto }> {
     const video = this.videos.get(videoId);
     if (!video) return { status: 202 };
     const settings = normalizeOptimizationSettings({
@@ -68,18 +95,21 @@ export class JobService {
     );
     const existing = this.reusableJob(video, "sample", settings);
     if (existing) return { status: existing.status === "completed" ? 200 : 202, job: this.publicJob(existing) };
+    const reservation = await this.reserve("sample", estimateSampleAllocation(video, settings, sampleSeconds));
     const job = this.createEncodeJob(video, settings, "sample", "sample");
+    this.trackReservation(job.id, reservation);
     this.enqueueMediaJob(job, () => this.execution.runEncode(job, video.storedPath, sampleSeconds));
     return { status: 202, job: this.publicJob(job) };
   }
 
-  createPosterJob(videoId: string, rawAtSeconds?: unknown): JobDto | undefined {
+  async createPosterJob(videoId: string, rawAtSeconds?: unknown): Promise<JobDto | undefined> {
     const video = this.videos.get(videoId);
     if (!video) return undefined;
     const atSeconds = Math.min(
       Math.max(Number(rawAtSeconds ?? Math.min(1, video.metadata.durationSeconds / 2)), 0),
       Math.max(0, video.metadata.durationSeconds - 0.1)
     );
+    const reservation = await this.reserve("poster", estimatePosterAllocation());
     const jobId = nanoid();
     const baseName = sanitizeFileName(`${path.parse(video.originalName).name}-poster`);
     const outputFileName = `${baseName}.webp`;
@@ -99,12 +129,13 @@ export class JobService {
     };
 
     this.jobs.set(job);
+    this.trackReservation(job.id, reservation);
     this.persistence.scheduleSave();
     this.enqueueMediaJob(job, () => this.execution.runPoster(job, video.storedPath, atSeconds));
     return this.publicJob(job);
   }
 
-  createPairJobs(videoId: string): { jobs: JobDto[] } | undefined {
+  async createPairJobs(videoId: string): Promise<{ jobs: JobDto[] } | undefined> {
     const video = this.videos.get(videoId);
     if (!video) return undefined;
 
@@ -147,11 +178,20 @@ export class JobService {
 
     const existingFallback = this.reusableJob(video, "encode", fallback);
     const existingModern = this.reusableJob(video, "encode", modern);
+    const fallbackBytes = existingFallback ? 0 : estimateEncodeAllocation(video, fallback);
+    const modernBytes = existingModern ? 0 : estimateEncodeAllocation(video, modern);
+    const requiredBytes = fallbackBytes + modernBytes;
+    if (requiredBytes > 0) await this.storagePolicy?.assertCanAllocate({ operation: "encode", requiredBytes });
     const fallbackJob = existingFallback ?? this.createEncodeJob(video, fallback, "encode", "fallback-h264");
     const modernJob = existingModern ?? this.createEncodeJob(video, modern, "encode", "modern-av1");
-    if (!existingFallback)
+    if (!existingFallback) {
+      this.trackReservation(fallbackJob.id, await this.reserve("encode", fallbackBytes));
       this.enqueueMediaJob(fallbackJob, () => this.execution.runEncode(fallbackJob, video.storedPath));
-    if (!existingModern) this.enqueueMediaJob(modernJob, () => this.execution.runEncode(modernJob, video.storedPath));
+    }
+    if (!existingModern) {
+      this.trackReservation(modernJob.id, await this.reserve("encode", modernBytes));
+      this.enqueueMediaJob(modernJob, () => this.execution.runEncode(modernJob, video.storedPath));
+    }
     return { jobs: [this.publicJob(fallbackJob), this.publicJob(modernJob)] };
   }
 
@@ -171,6 +211,7 @@ export class JobService {
     if (!job) return undefined;
     if (job.status !== "running" && job.status !== "queued") return this.publicJob(job);
     if (job.status === "queued") this.scheduler.cancelQueued(job.id);
+    this.releaseReservation(job.id);
     this.lifecycle.cancel(job, "Canceled and removed");
     const responseJob = this.publicJob(job);
     await this.cleanup.removeJob(job);
@@ -205,6 +246,7 @@ export class JobService {
   async delete(id: string): Promise<boolean> {
     const job = this.jobs.get(id);
     if (!job) return false;
+    this.releaseReservation(id);
     await this.cleanup.removeJob(job);
     await this.cleanup.pruneOrphanFiles();
     await this.persistence.save();
@@ -283,14 +325,37 @@ export class JobService {
   private enqueueMediaJob(job: JobEntity, run: () => Promise<void>): void {
     this.scheduler.enqueue({
       jobId: job.id,
-      run,
+      run: async () => {
+        try {
+          await run();
+        } finally {
+          this.releaseReservation(job.id);
+        }
+      },
       onUnhandledError: async (error) => {
         const message = error instanceof Error ? error.message : String(error);
         if (this.lifecycle.fail(job, message)) {
           await this.cleanup.removeJobArtifacts(job);
           await this.persistence.save();
         }
+        this.releaseReservation(job.id);
       }
     });
+  }
+
+  private async reserve(
+    operation: "encode" | "sample" | "poster",
+    requiredBytes: number
+  ): Promise<StorageReservation | undefined> {
+    return this.storagePolicy?.reserve({ operation, requiredBytes });
+  }
+
+  trackReservation(jobId: string, reservation: StorageReservation | undefined): void {
+    if (reservation) this.reservations.set(jobId, reservation);
+  }
+
+  releaseReservation(jobId: string): void {
+    this.reservations.get(jobId)?.release();
+    this.reservations.delete(jobId);
   }
 }

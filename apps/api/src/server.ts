@@ -15,7 +15,7 @@ async function main(): Promise<void> {
   const runtime = createProductionRuntime(config);
   await runtime.initialize();
 
-  const app = createApp({ config, runtime, upload: createUploadMiddleware(config) });
+  const app = createApp({ config, runtime, upload: createUploadMiddleware(config, runtime.storagePolicy) });
   await startServerLifecycle({ app, runtime, host: config.host, port: config.port });
 }
 

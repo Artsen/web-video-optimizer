@@ -8,6 +8,7 @@ import { createHistoryRouter } from "./history-routes.js";
 import { createImportRouter } from "./import-routes.js";
 import { createJobRouter } from "./job-routes.js";
 import { createPackageRouter } from "./package-routes.js";
+import { createStorageRouter } from "./storage-routes.js";
 import { createVideoRouter } from "./video-routes.js";
 
 export type RouteDependencies = {
@@ -19,6 +20,7 @@ export type RouteDependencies = {
 export function registerRoutes(app: Express, dependencies: RouteDependencies): void {
   app.use(createHealthRouter());
   app.use(createCapabilityRouter(dependencies.runtime));
+  app.use(createStorageRouter(dependencies.runtime));
   app.use(createHistoryRouter(dependencies.runtime));
   app.use(createImportRouter(dependencies.runtime));
   app.use(createVideoRouter(dependencies.runtime, dependencies.upload));

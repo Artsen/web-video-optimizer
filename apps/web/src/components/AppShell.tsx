@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   FileVideo,
+  HardDrive,
   History,
   Moon,
   Package,
@@ -195,6 +196,7 @@ function HistoryView({ controller }: { controller: VideoOptimizerAppController }
           Delete Selected
         </button>
       </div>
+      <StoragePanel controller={controller} />
       <div className="history-layout">
         <div className="panel">
           <SectionHeader icon={<FileVideo size={20} />} title="Uploaded Files" />
@@ -276,5 +278,77 @@ function HistoryView({ controller }: { controller: VideoOptimizerAppController }
         </div>
       </div>
     </section>
+  );
+}
+
+function StoragePanel({ controller }: { controller: VideoOptimizerAppController }) {
+  const { library } = controller;
+  const storage = library.storageStatus;
+  if (!storage) {
+    return (
+      <div className="panel storage-panel">
+        <SectionHeader icon={<HardDrive size={20} />} title="Storage" kicker="Checking local managed storage..." />
+      </div>
+    );
+  }
+
+  const pressureCopy =
+    storage.pressure === "critical"
+      ? "Storage is critically low. Delete old history items or free space before starting more work."
+      : storage.pressure === "warning"
+        ? "Storage is getting low. Existing history is preserved until you delete it."
+        : "Storage looks healthy.";
+  const hasCleanup = storage.cleanup.staleTemporaryFileCount > 0;
+
+  return (
+    <div className={`panel storage-panel pressure-${storage.pressure}`}>
+      <SectionHeader icon={<HardDrive size={20} />} title="Storage" kicker={pressureCopy} />
+      <div className="storage-grid">
+        <span>
+          <strong>{formatBytes(storage.managedBytes)}</strong>
+          <em>managed by this app</em>
+        </span>
+        <span>
+          <strong>{formatBytes(storage.reservedBytes)}</strong>
+          <em>reserved for active work</em>
+        </span>
+        <span>
+          <strong>{storage.availableBytes === undefined ? "Unknown" : formatBytes(storage.availableBytes)}</strong>
+          <em>available on disk</em>
+        </span>
+        <span>
+          <strong>
+            {storage.configuredMaxBytes === undefined ? "Unlimited" : formatBytes(storage.configuredMaxBytes)}
+          </strong>
+          <em>managed quota</em>
+        </span>
+        <span>
+          <strong>{formatBytes(storage.minimumFreeBytes)}</strong>
+          <em>minimum reserve</em>
+        </span>
+      </div>
+      <div className="storage-breakdown" aria-label="Storage usage by area">
+        <span>Uploads {formatBytes(storage.areas.uploads.bytes)}</span>
+        <span>Outputs {formatBytes(storage.areas.outputs.bytes)}</span>
+        <span>Temporary {formatBytes(storage.areas.temporary.bytes)}</span>
+        <span>Staging {formatBytes(storage.areas.staging.bytes)}</span>
+      </div>
+      <div className="storage-cleanup">
+        <p className="muted">
+          Reclaimable temporary data: {formatBytes(storage.cleanup.staleTemporaryBytes)} across{" "}
+          {storage.cleanup.staleTemporaryFileCount} file(s).
+        </p>
+        <button
+          className="button secondary"
+          type="button"
+          disabled={!hasCleanup || library.isCleaningStorage}
+          onClick={() => void library.cleanupStorage()}
+          aria-label="Clean temporary files only"
+        >
+          {library.isCleaningStorage ? "Cleaning..." : "Clean Temporary Files"}
+        </button>
+      </div>
+      {library.storageCleanupStatus && <p className="success-text">{library.storageCleanupStatus}</p>}
+    </div>
   );
 }

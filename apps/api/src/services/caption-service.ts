@@ -27,6 +27,8 @@ import type { JobLifecycle } from "./job-lifecycle-service.js";
 import type { JobService } from "./job-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
 import { commandPreview, commandPreviewFor } from "./helpers/command-preview.js";
+import type { StoragePolicyService } from "../storage/storage-policy-service.js";
+import { estimateMuxAllocation, estimateSubtitleAllocation } from "../storage/allocation-estimates.js";
 
 export class CaptionService {
   constructor(
@@ -44,10 +46,11 @@ export class CaptionService {
     private readonly whisperModel: string | undefined,
     private readonly scheduler: JobScheduler,
     private readonly lifecycle: JobLifecycle,
-    private readonly mediaPolicy: ProcessExecutionPolicy
+    private readonly mediaPolicy: ProcessExecutionPolicy,
+    private readonly storagePolicy?: StoragePolicyService
   ) {}
 
-  createSubtitleJob(videoId: string): { status: 200 | 202 | 400 | 404; job?: JobDto; error?: string } {
+  async createSubtitleJob(videoId: string): Promise<{ status: 200 | 202 | 400 | 404; job?: JobDto; error?: string }> {
     const video = this.videos.get(videoId);
     if (!video) return { status: 404, error: "Video not found" };
     if (video.metadata.trackCounts.audio === 0) {
@@ -64,7 +67,12 @@ export class CaptionService {
       );
     if (existing)
       return { status: existing.status === "completed" ? 200 : 202, job: this.jobService.publicJob(existing) };
+    const reservation = await this.storagePolicy?.reserve({
+      operation: "subtitle",
+      requiredBytes: estimateSubtitleAllocation(video)
+    });
     const job = this.createSubtitleEntity(video);
+    this.jobService.trackReservation(job.id, reservation);
     this.enqueueMediaJob(job, () => this.runSubtitleJob(job, video.storedPath));
     return { status: 202, job: this.jobService.publicJob(job) };
   }
@@ -99,7 +107,14 @@ export class CaptionService {
   createMuxSubtitleJob(
     videoJobId: string,
     subtitleJobId: string
-  ): { status: 202 | 400 | 404; job?: JobDto; error?: string } {
+  ): Promise<{ status: 202 | 400 | 404; job?: JobDto; error?: string }> {
+    return this.createMuxSubtitleJobInternal(videoJobId, subtitleJobId);
+  }
+
+  private async createMuxSubtitleJobInternal(
+    videoJobId: string,
+    subtitleJobId: string
+  ): Promise<{ status: 202 | 400 | 404; job?: JobDto; error?: string }> {
     const videoJob = this.jobs.get(videoJobId);
     const subtitleJob = this.jobs.get(subtitleJobId);
     const video = videoJob ? this.videos.get(videoJob.videoId) : undefined;
@@ -122,7 +137,12 @@ export class CaptionService {
       return { status: 400, error: "Completed subtitle output not found" };
     }
 
+    const reservation = await this.storagePolicy?.reserve({
+      operation: "mux",
+      requiredBytes: estimateMuxAllocation(videoJob)
+    });
     const job = this.createMuxEntity(video, videoJob, subtitleJob);
+    this.jobService.trackReservation(job.id, reservation);
     this.enqueueMediaJob(job, () => this.execution.runMux(job, videoJob, subtitleJob));
     return { status: 202, job: this.jobService.publicJob(job) };
   }
@@ -307,6 +327,7 @@ export class CaptionService {
         try {
           await handler();
         } finally {
+          this.jobService.releaseReservation(job.id);
           resolve();
         }
       };
@@ -449,13 +470,20 @@ export class CaptionService {
   private enqueueMediaJob(job: JobEntity, run: () => Promise<void>): void {
     this.scheduler.enqueue({
       jobId: job.id,
-      run,
+      run: async () => {
+        try {
+          await run();
+        } finally {
+          this.jobService.releaseReservation(job.id);
+        }
+      },
       onUnhandledError: async (error) => {
         const message = error instanceof Error ? error.message : String(error);
         if (this.lifecycle.fail(job, message)) {
           await this.cleanup.removeJobArtifacts(job);
           await this.persistence.save();
         }
+        this.jobService.releaseReservation(job.id);
       }
     });
   }

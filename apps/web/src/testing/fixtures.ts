@@ -4,6 +4,7 @@ import type {
   JobDto,
   OptimizationSettings,
   PackageMetadata,
+  StorageStatusDto,
   VideoRecordDto
 } from "@local-video-optimizer/contracts";
 
@@ -100,6 +101,28 @@ export function packageMetadata(overrides: Partial<PackageMetadata> = {}): Packa
     description: "Video for homepage.",
     language: "en",
     filenamePrefix: "homepage-video",
+    ...overrides
+  };
+}
+
+export function storageStatus(overrides: Partial<StorageStatusDto> = {}): StorageStatusDto {
+  return {
+    managedBytes: 1_250_000,
+    reservedBytes: 0,
+    availableBytes: 50_000_000,
+    totalFilesystemBytes: 100_000_000,
+    minimumFreeBytes: 10_000_000,
+    pressure: "normal",
+    areas: {
+      uploads: { bytes: 10_000_000, fileCount: 1 },
+      outputs: { bytes: 1_000_000, fileCount: 1 },
+      temporary: { bytes: 250_000, fileCount: 1 },
+      staging: { bytes: 0, fileCount: 0 }
+    },
+    cleanup: {
+      staleTemporaryBytes: 250_000,
+      staleTemporaryFileCount: 1
+    },
     ...overrides
   };
 }

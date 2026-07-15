@@ -8,11 +8,15 @@ import {
   CapabilitiesSchema,
   HistorySnapshotSchema,
   JobDtoSchema,
+  StorageCleanupResultDtoSchema,
+  StorageStatusDtoSchema,
   VideoRecordDtoSchema,
   type Capabilities,
   type HistorySnapshot,
   type JobDto,
   type OptimizationSettings,
+  type StorageCleanupResultDto,
+  type StorageStatusDto,
   type VideoMetadata,
   type VideoRecordDto
 } from "@local-video-optimizer/contracts";
@@ -90,6 +94,25 @@ function noPrivateFields(value: unknown): void {
   expect(text).not.toContain("sourceHash");
 }
 
+function storageStatus(overrides: Partial<StorageStatusDto> = {}): StorageStatusDto {
+  return {
+    managedBytes: 0,
+    reservedBytes: 0,
+    availableBytes: 10_000_000,
+    totalFilesystemBytes: 20_000_000,
+    minimumFreeBytes: 1024,
+    pressure: "normal",
+    areas: {
+      uploads: { bytes: 0, fileCount: 0 },
+      outputs: { bytes: 0, fileCount: 0 },
+      temporary: { bytes: 0, fileCount: 0 },
+      staging: { bytes: 0, fileCount: 0 }
+    },
+    cleanup: { staleTemporaryBytes: 0, staleTemporaryFileCount: 0 },
+    ...overrides
+  };
+}
+
 class FakeRuntime implements ApiRuntime {
   public uploaded?: UploadedVideoFile;
   public importedUrl?: string;
@@ -116,6 +139,14 @@ class FakeRuntime implements ApiRuntime {
       whisperModel: false,
       ytDlp: false
     };
+  }
+
+  async getStorageStatus(): Promise<StorageStatusDto> {
+    return storageStatus();
+  }
+
+  async cleanupStorage(): Promise<StorageCleanupResultDto> {
+    return { removedBytes: 0, removedFileCount: 0, storage: storageStatus() };
   }
 
   getHistory(): HistorySnapshot {
@@ -158,33 +189,33 @@ class FakeRuntime implements ApiRuntime {
     return this.videos.delete(id);
   }
 
-  createOptimizationJob(
+  async createOptimizationJob(
     _videoId: string,
     settings: Partial<OptimizationSettings>
-  ): { status: 200 | 202; job?: JobDto } {
+  ): Promise<{ status: 200 | 202; job?: JobDto }> {
     this.lastOptimization = settings;
     return { status: 202, job: job({ id: "created-job", status: "queued", progress: 0 }) };
   }
 
-  createSampleJob(
+  async createSampleJob(
     _videoId: string,
     settings: Partial<OptimizationSettings>,
     sampleSeconds?: unknown
-  ): { status: 200 | 202; job?: JobDto } {
+  ): Promise<{ status: 200 | 202; job?: JobDto }> {
     this.lastSample = { settings, sampleSeconds };
     return { status: 202, job: job({ id: "sample-job", kind: "sample", status: "queued", progress: 0 }) };
   }
 
-  createPosterJob(_videoId: string, atSeconds?: unknown): JobDto | undefined {
+  async createPosterJob(_videoId: string, atSeconds?: unknown): Promise<JobDto | undefined> {
     this.lastPosterAtSeconds = atSeconds;
     return job({ id: "poster-job", kind: "poster", outputFileName: "poster.webp" });
   }
 
-  createSubtitleJob(): { status: 200 | 202 | 400 | 404; job?: JobDto; error?: string } {
+  async createSubtitleJob(): Promise<{ status: 200 | 202 | 400 | 404; job?: JobDto; error?: string }> {
     return { status: 202, job: job({ id: "subtitle-job", kind: "subtitle", outputFileName: "captions.vtt" }) };
   }
 
-  createPairJobs(): { jobs: JobDto[] } | undefined {
+  async createPairJobs(): Promise<{ jobs: JobDto[] } | undefined> {
     return {
       jobs: [job({ id: "fallback-job" }), job({ id: "modern-job", settings: settings({ outputContainer: "webm" }) })]
     };
@@ -239,10 +270,10 @@ class FakeRuntime implements ApiRuntime {
     return job({ id, kind: "subtitle", message: "Captions edited" });
   }
 
-  createMuxSubtitleJob(
+  async createMuxSubtitleJob(
     _videoJobId: string,
     subtitleJobId: string
-  ): { status: 202 | 400 | 404; job?: JobDto; error?: string } {
+  ): Promise<{ status: 202 | 400 | 404; job?: JobDto; error?: string }> {
     this.lastMuxSubtitleJobId = subtitleJobId;
     return { status: 202, job: job({ id: "mux-job", kind: "mux" }) };
   }
@@ -309,6 +340,20 @@ describe("public API response shapes", () => {
 
     HistorySnapshotSchema.parse(response.body);
     noPrivateFields(response.body);
+  });
+
+  it("returns safe storage status and cleanup DTOs without private fields", async () => {
+    const { app } = makeApp();
+    const status = await request(app).get("/api/storage").expect(200);
+
+    StorageStatusDtoSchema.parse(status.body);
+    expect(status.body).toMatchObject({ pressure: "normal", minimumFreeBytes: 1024 });
+    noPrivateFields(status.body);
+
+    const cleanup = await request(app).post("/api/storage/cleanup").expect(200);
+    StorageCleanupResultDtoSchema.parse(cleanup.body);
+    expect(cleanup.body).toMatchObject({ removedBytes: 0, removedFileCount: 0 });
+    noPrivateFields(cleanup.body);
   });
 
   it("returns empty history matching the shared schema", async () => {

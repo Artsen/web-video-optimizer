@@ -8,15 +8,18 @@ import { parseParams, parseRequest } from "../validation/request-validation.js";
 export function createCaptionRouter(runtime: ApiRuntime, options: { jsonBodyLimitBytes: number }): Router {
   const router = Router();
 
-  router.post("/api/videos/:id/subtitles", (req, res) => {
-    const params = parseParams(IdParamsSchema, req);
-    const result = runtime.createSubtitleJob(params.id);
-    if (!result.job) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
-    res.status(result.status).json(result.job);
-  });
+  router.post(
+    "/api/videos/:id/subtitles",
+    asyncHandler(async (req, res) => {
+      const params = parseParams(IdParamsSchema, req);
+      const result = await runtime.createSubtitleJob(params.id);
+      if (!result.job) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      res.status(result.status).json(result.job);
+    })
+  );
 
   router.get(
     "/api/jobs/:id/captions",
@@ -48,15 +51,19 @@ export function createCaptionRouter(runtime: ApiRuntime, options: { jsonBodyLimi
     })
   );
 
-  router.post("/api/jobs/:id/mux-subtitles", requireJsonBody, (req, res) => {
-    const { params, body } = parseRequest({ params: IdParamsSchema, body: SubtitleJobIdBodySchema }, req);
-    const result = runtime.createMuxSubtitleJob(params.id, body.subtitleJobId);
-    if (!result.job) {
-      res.status(result.status).json({ error: result.error });
-      return;
-    }
-    res.status(result.status).json(result.job);
-  });
+  router.post(
+    "/api/jobs/:id/mux-subtitles",
+    requireJsonBody,
+    asyncHandler(async (req, res) => {
+      const { params, body } = parseRequest({ params: IdParamsSchema, body: SubtitleJobIdBodySchema }, req);
+      const result = await runtime.createMuxSubtitleJob(params.id, body.subtitleJobId);
+      if (!result.job) {
+        res.status(result.status).json({ error: result.error });
+        return;
+      }
+      res.status(result.status).json(result.job);
+    })
+  );
 
   return router;
 }

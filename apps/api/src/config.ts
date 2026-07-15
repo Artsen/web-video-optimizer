@@ -15,6 +15,10 @@ export type ApiConfig = {
   uploadFileSizeLimitBytes: number;
   maxConcurrentMediaJobs: number;
   shutdownGracePeriodMs: number;
+  minFreeStorageBytes: number;
+  maxManagedStorageBytes: number;
+  tempFileMaxAgeMs: number;
+  housekeepingIntervalMs: number;
   mediaProcessTimeoutMs: number;
   toolCommandTimeoutMs: number;
   processKillGracePeriodMs: number;
@@ -32,8 +36,23 @@ export type ParseApiConfigOptions = {
 
 function parsePositiveInteger(source: Record<string, string | undefined>, name: string, defaultValue: string): number {
   const raw = source[name] ?? defaultValue;
+  if (raw.trim() === "") throw new Error(`Invalid ${name}: ${raw}`);
   const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${raw}`);
+  }
+  return parsed;
+}
+
+function parseNonnegativeInteger(
+  source: Record<string, string | undefined>,
+  name: string,
+  defaultValue: string
+): number {
+  const raw = source[name] ?? defaultValue;
+  if (raw.trim() === "") throw new Error(`Invalid ${name}: ${raw}`);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`Invalid ${name}: ${raw}`);
   }
   return parsed;
@@ -106,6 +125,10 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
   const jsonBodyLimitBytes = parsePositiveInteger(source, "JSON_BODY_LIMIT_BYTES", "5242880");
   const uploadFileSizeLimitBytes = parsePositiveInteger(source, "UPLOAD_FILE_SIZE_LIMIT_BYTES", "2147483648");
   const shutdownGracePeriodMs = parsePositiveInteger(source, "SHUTDOWN_GRACE_PERIOD_MS", "15000");
+  const minFreeStorageBytes = parsePositiveInteger(source, "MIN_FREE_STORAGE_BYTES", "536870912");
+  const maxManagedStorageBytes = parseNonnegativeInteger(source, "MAX_MANAGED_STORAGE_BYTES", "0");
+  const tempFileMaxAgeMs = parsePositiveInteger(source, "TEMP_FILE_MAX_AGE_MS", "86400000");
+  const housekeepingIntervalMs = parsePositiveInteger(source, "HOUSEKEEPING_INTERVAL_MS", "3600000");
   const mediaProcessTimeoutMs = parsePositiveInteger(source, "MEDIA_PROCESS_TIMEOUT_MS", "1800000");
   const toolCommandTimeoutMs = parsePositiveInteger(source, "TOOL_COMMAND_TIMEOUT_MS", "60000");
   const processKillGracePeriodMs = parsePositiveInteger(source, "PROCESS_KILL_GRACE_PERIOD_MS", "5000");
@@ -128,6 +151,10 @@ export function parseApiConfig(source: Record<string, string | undefined>, optio
     uploadFileSizeLimitBytes,
     maxConcurrentMediaJobs,
     shutdownGracePeriodMs,
+    minFreeStorageBytes,
+    maxManagedStorageBytes,
+    tempFileMaxAgeMs,
+    housekeepingIntervalMs,
     mediaProcessTimeoutMs,
     toolCommandTimeoutMs,
     processKillGracePeriodMs,

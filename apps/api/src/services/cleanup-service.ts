@@ -70,14 +70,11 @@ export class CleanupService {
     if (this.storage) {
       await this.storage.pruneDirectory("uploads", uploadKeep);
       await this.storage.pruneDirectory("outputs", outputKeep);
-      await this.storage.pruneDirectory("tmp", new Set());
-      await this.storage.pruneDirectory("upload-staging", new Set());
       return;
     }
     await Promise.all([
       this.pruneDirectory(this.directories.uploadDir, uploadKeep),
-      this.pruneDirectory(this.directories.outputDir, outputKeep),
-      this.pruneDirectory(this.directories.tmpDir, new Set())
+      this.pruneDirectory(this.directories.outputDir, outputKeep)
     ]);
   }
 

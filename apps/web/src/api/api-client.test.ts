@@ -69,6 +69,8 @@ describe("api client", () => {
     await api.cancelJob("job-1");
     await api.deleteHistory(["video-1"], ["job-1"]);
     await api.revealJob("job-1");
+    await api.getStorageStatus();
+    await api.cleanupStorage();
 
     expect(fetchFn.mock.calls.map(([url]) => String(url))).toEqual([
       "http://localhost:4000/api/videos/url",
@@ -84,7 +86,9 @@ describe("api client", () => {
       "http://localhost:4000/api/jobs/job-1",
       "http://localhost:4000/api/jobs/job-1/cancel",
       "http://localhost:4000/api/history/delete",
-      "http://localhost:4000/api/jobs/job-1/reveal"
+      "http://localhost:4000/api/jobs/job-1/reveal",
+      "http://localhost:4000/api/storage",
+      "http://localhost:4000/api/storage/cleanup"
     ]);
 
     expect(fetchFn.mock.calls[0][1]).toMatchObject({
@@ -96,6 +100,7 @@ describe("api client", () => {
     expect(JSON.parse(String(fetchFn.mock.calls[7][1]?.body))).toEqual({ vtt: "WEBVTT" });
     expect(JSON.parse(String(fetchFn.mock.calls[8][1]?.body))).toEqual({ subtitleJobId: "subtitle-1" });
     expect(JSON.parse(String(fetchFn.mock.calls[12][1]?.body))).toEqual({ videoIds: ["video-1"], jobIds: ["job-1"] });
+    expect(fetchFn.mock.calls[15][1]?.method).toBe("POST");
   });
 
   it("preserves pair compatibility by POSTing the current settings body", async () => {
