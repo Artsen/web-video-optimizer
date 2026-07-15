@@ -6,6 +6,15 @@ import process from "node:process";
 const repoRoot = process.cwd();
 const storageRoot = path.join(repoRoot, ".tmp", "playwright-storage");
 
+async function removeTree(pathToRemove) {
+  await fs.rm(pathToRemove, {
+    force: true,
+    maxRetries: 10,
+    recursive: true,
+    retryDelay: 250
+  });
+}
+
 async function run(command, args, env = {}) {
   await new Promise((resolve, reject) => {
     const executable = process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : command;
@@ -28,7 +37,7 @@ async function run(command, args, env = {}) {
 }
 
 async function main() {
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await removeTree(storageRoot);
   await fs.mkdir(storageRoot, { recursive: true });
   await run("npm", ["run", "build"], {
     VITE_API_BASE_URL: "http://127.0.0.1:4100"
@@ -38,7 +47,7 @@ async function main() {
       E2E_STORAGE_ROOT: storageRoot
     });
   } finally {
-    await fs.rm(storageRoot, { force: true, recursive: true });
+    await removeTree(storageRoot);
   }
 }
 

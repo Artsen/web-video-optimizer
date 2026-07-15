@@ -8,6 +8,15 @@ const tmpRoot = path.join(repoRoot, ".tmp");
 const pidFile = path.join(tmpRoot, "playwright-servers.json");
 const storageRoot = process.env.E2E_STORAGE_ROOT ?? path.join(tmpRoot, "playwright-storage");
 
+async function removeTree(pathToRemove) {
+  await fs.rm(pathToRemove, {
+    force: true,
+    maxRetries: 10,
+    recursive: true,
+    retryDelay: 250
+  });
+}
+
 async function waitFor(url) {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
@@ -35,7 +44,7 @@ function spawnServer(command, args, env) {
 }
 
 export default async function globalSetup() {
-  await fs.rm(storageRoot, { force: true, recursive: true });
+  await removeTree(storageRoot);
   await fs.mkdir(storageRoot, { recursive: true });
 
   const apiPid = spawnServer(process.execPath, [path.join(repoRoot, "apps", "api", "dist", "server.js")], {
