@@ -280,7 +280,9 @@ so routes and application services do not import `statfs` directly and tests can
 `tmp/upload-staging` areas. It does not follow symlinks, does not scan the repository, and does not expose filenames or
 paths. The public DTO reports aggregate byte and file counts plus stale temporary totals only.
 
-`StoragePolicyService` combines filesystem capacity, managed usage, runtime reservations, and configuration:
+`StoragePolicyService` combines filesystem capacity, managed usage, runtime reservations, and configuration. Public
+`managedBytes` represents actual inventoried files only; public `reservedBytes` represents runtime-scoped queued or
+active work. Admission and pressure decisions use `managedBytes + reservedBytes` internally.
 
 - `MIN_FREE_STORAGE_BYTES` is a hard reserve that must remain after new work is admitted.
 - `MAX_MANAGED_STORAGE_BYTES=0` means no app-managed quota; positive values cap managed uploads, outputs, temp files,
@@ -290,8 +292,8 @@ paths. The public DTO reports aggregate byte and file counts plus stale temporar
 
 Uploads, URL imports, encode/sample/poster/subtitle/mux jobs, and package creation estimate required bytes before
 admission. Runtime-scoped reservations prevent obvious concurrent overcommit and are released on success, failure,
-cancellation, request abort, or shutdown. Pair jobs first check the combined allocation so the UI does not receive one
-half of a pair after the other half was rejected for capacity.
+cancellation, request abort, or shutdown. Pair jobs reserve the missing fallback and modern outputs as one batch before
+creating new records, so unrelated admissions cannot interleave between the two halves.
 
 Capacity failures use `507 INSUFFICIENT_STORAGE` with operation-specific safe messages. Configured upload-size failures
 remain `413 UPLOAD_TOO_LARGE`. Process-backed disk-full signals are mapped from `ENOSPC` or bounded stderr patterns,
@@ -307,8 +309,8 @@ directory, keep the last valid primary as backup, and surface persistence failur
 overhead with storage-producing operations but does not introduce a durable retention policy.
 
 The browser reads storage status through the typed API client, not direct `fetch`. The Library storage panel presents
-managed usage, available disk space, quota, pressure copy, area breakdowns, and temporary cleanup. It never receives
-private storage paths, filenames, hashes, or platform device identifiers.
+managed usage, reserved work, available disk space, quota, pressure copy, area breakdowns, and temporary cleanup. It
+never receives private storage paths, filenames, hashes, or platform device identifiers.
 
 ## Security And Privacy
 

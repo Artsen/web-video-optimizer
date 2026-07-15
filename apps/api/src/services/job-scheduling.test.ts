@@ -19,6 +19,8 @@ import { JobExecutionService, type JobExecutor } from "./job-execution-service.j
 import { JobLifecycleService } from "./job-lifecycle-service.js";
 import { JobService } from "./job-service.js";
 import { PackageService } from "./package-service.js";
+import type { AllocationRequest, StoragePolicyService } from "../storage/storage-policy-service.js";
+import type { StorageReservation } from "../storage/storage-reservations.js";
 import type { RecoveryReport, StatePersistenceService } from "./state-persistence-service.js";
 
 const tempDirs: string[] = [];
@@ -30,6 +32,7 @@ const processPolicy = {
 
 class FakePersistence implements StatePersistenceService {
   saves = 0;
+  onScheduleSave: (() => void) | undefined;
 
   async fileHash(): Promise<string> {
     return "hash";
@@ -41,6 +44,7 @@ class FakePersistence implements StatePersistenceService {
 
   scheduleSave(): void {
     this.saves += 1;
+    this.onScheduleSave?.();
   }
 
   async flush(): Promise<void> {}
@@ -61,6 +65,34 @@ class FakePersistence implements StatePersistenceService {
 
 class FakeRevealer implements FileRevealer {
   async reveal(): Promise<void> {}
+}
+
+class FakeStorageReservation implements StorageReservation {
+  released = false;
+
+  constructor(readonly bytes: number) {}
+
+  release(): void {
+    this.released = true;
+  }
+}
+
+class FakeStoragePolicy {
+  readonly reserveManyCalls: AllocationRequest[][] = [];
+  readonly reservations: FakeStorageReservation[] = [];
+  rejectReserveMany: Error | undefined;
+
+  async reserve(request: AllocationRequest): Promise<StorageReservation> {
+    return this.reserveMany([request]).then((reservations) => reservations[0]);
+  }
+
+  async reserveMany(requests: AllocationRequest[]): Promise<StorageReservation[]> {
+    this.reserveManyCalls.push(requests);
+    if (this.rejectReserveMany) throw this.rejectReserveMany;
+    const reservations = requests.map((request) => new FakeStorageReservation(Math.ceil(request.requiredBytes)));
+    this.reservations.push(...reservations);
+    return reservations;
+  }
 }
 
 function deferred() {
@@ -177,6 +209,46 @@ function settings(overrides: Partial<OptimizationSettings> = {}): OptimizationSe
   });
 }
 
+function pairSettings(base = "source") {
+  return {
+    fallback: normalizeOptimizationSettings({
+      outputContainer: "mp4",
+      videoCodec: "libx264",
+      audioCodec: "aac",
+      width: 1280,
+      frameRate: 24,
+      crf: 26,
+      preset: "slow",
+      audioMode: "compress",
+      audioBitrateKbps: 128,
+      audioSampleRate: 48000,
+      audioChannels: 2,
+      cpuUsed: 5,
+      fastStart: true,
+      stripMetadata: true,
+      outputFilename: `${base}-fallback-h264`
+    }),
+    modern: normalizeOptimizationSettings({
+      outputContainer: "webm",
+      videoCodec: "libaom-av1",
+      audioCodec: "libopus",
+      width: 1280,
+      frameRate: 24,
+      crf: 36,
+      preset: "slow",
+      audioMode: "compress",
+      cpuUsed: 5,
+      rowMt: true,
+      audioBitrateKbps: 96,
+      audioSampleRate: 48000,
+      audioChannels: 2,
+      fastStart: false,
+      stripMetadata: true,
+      outputFilename: `${base}-modern-av1`
+    })
+  };
+}
+
 function completedJob(root: string, overrides: Partial<JobEntity> = {}): JobEntity {
   return {
     id: "completed-video",
@@ -193,7 +265,12 @@ function completedJob(root: string, overrides: Partial<JobEntity> = {}): JobEnti
   };
 }
 
-function makeServices(root: string, concurrency = 1, execution: JobExecutor = new DeferredExecution()) {
+function makeServices(
+  root: string,
+  concurrency = 1,
+  execution: JobExecutor = new DeferredExecution(),
+  storagePolicy?: StoragePolicyService
+) {
   const videos = new InMemoryVideoRepository();
   const jobs = new InMemoryJobRepository();
   const registry = new InMemoryProcessRegistry();
@@ -221,7 +298,9 @@ function makeServices(root: string, concurrency = 1, execution: JobExecutor = ne
     execution,
     new FakeRevealer(),
     scheduler,
-    lifecycle
+    lifecycle,
+    undefined,
+    storagePolicy
   );
   return { videos, jobs, registry, persistence, scheduler, lifecycle, cleanup, jobService, execution };
 }
@@ -346,6 +425,130 @@ describe("service media scheduling", () => {
     const pairTwo = (await two.jobService.createPairJobs("video-2"))!;
     expect(executionTwo.encodeCalls.map((call) => call.job.id)).toEqual(pairTwo.jobs.map((job) => job.id));
     expect(two.scheduler.getSnapshot().queuedJobIds).toEqual([]);
+  });
+
+  it("rejects pair creation before creating jobs when combined capacity does not fit", async () => {
+    const root = await tempRoot();
+    const execution = new DeferredExecution();
+    const storagePolicy = new FakeStoragePolicy();
+    storagePolicy.rejectReserveMany = new Error("combined capacity failed");
+    const { videos, jobs, scheduler, jobService } = makeServices(
+      root,
+      1,
+      execution,
+      storagePolicy as unknown as StoragePolicyService
+    );
+    videos.set(video(root));
+
+    await expect(jobService.createPairJobs("video-1")).rejects.toThrow("combined capacity failed");
+
+    expect(storagePolicy.reserveManyCalls).toHaveLength(1);
+    expect(storagePolicy.reserveManyCalls[0]).toHaveLength(2);
+    expect(jobs.getAll()).toEqual([]);
+    expect(scheduler.getSnapshot()).toMatchObject({ queuedJobIds: [], runningJobIds: [] });
+    expect(storagePolicy.reservations).toEqual([]);
+  });
+
+  it("reserves only missing pair outputs for partial reuse", async () => {
+    const root = await tempRoot();
+    const pair = pairSettings();
+
+    async function runCase(existing: Array<"fallback" | "modern">): Promise<number> {
+      const storagePolicy = new FakeStoragePolicy();
+      const { videos, jobs, jobService } = makeServices(
+        root,
+        1,
+        new DeferredExecution(),
+        storagePolicy as unknown as StoragePolicyService
+      );
+      videos.set(video(root));
+      if (existing.includes("fallback")) {
+        jobs.set(
+          completedJob(root, { id: `fallback-${existing.join("-")}`, status: "queued", settings: pair.fallback })
+        );
+      }
+      if (existing.includes("modern")) {
+        jobs.set(completedJob(root, { id: `modern-${existing.join("-")}`, status: "queued", settings: pair.modern }));
+      }
+
+      await jobService.createPairJobs("video-1");
+      return storagePolicy.reserveManyCalls[0]?.length ?? 0;
+    }
+
+    await expect(runCase([])).resolves.toBe(2);
+    await expect(runCase(["fallback"])).resolves.toBe(1);
+    await expect(runCase(["modern"])).resolves.toBe(1);
+    await expect(runCase(["fallback", "modern"])).resolves.toBe(0);
+  });
+
+  it("schedules pair persistence only after all missing records exist", async () => {
+    const root = await tempRoot();
+    const { videos, jobs, persistence, jobService } = makeServices(root, 1, new DeferredExecution());
+    videos.set(video(root));
+    const observedJobCounts: number[] = [];
+    persistence.onScheduleSave = () => {
+      observedJobCounts.push(jobs.getAll().length);
+    };
+
+    await jobService.createPairJobs("video-1");
+
+    expect(observedJobCounts).toEqual([2]);
+    expect(jobs.getAll()).toHaveLength(2);
+  });
+
+  it("rolls back pair records and reservations when setup fails after batch reservation", async () => {
+    const root = await tempRoot();
+    const execution = new DeferredExecution();
+    const storagePolicy = new FakeStoragePolicy();
+    const { videos, jobs, scheduler, persistence, jobService } = makeServices(
+      root,
+      1,
+      execution,
+      storagePolicy as unknown as StoragePolicyService
+    );
+    videos.set(video(root));
+    const originalSet = jobs.set.bind(jobs);
+    let setCalls = 0;
+    vi.spyOn(jobs, "set").mockImplementation((job) => {
+      setCalls += 1;
+      if (setCalls === 2) throw new Error("repository write failed");
+      originalSet(job);
+    });
+
+    await expect(jobService.createPairJobs("video-1")).rejects.toThrow("repository write failed");
+
+    expect(storagePolicy.reservations).toHaveLength(2);
+    expect(storagePolicy.reservations.every((reservation) => reservation.released)).toBe(true);
+    expect(jobs.getAll()).toEqual([]);
+    expect(scheduler.getSnapshot()).toMatchObject({ queuedJobIds: [], runningJobIds: [] });
+    expect(persistence.saves).toBeGreaterThan(0);
+  });
+
+  it("preserves the pair setup error if rollback cleanup also fails", async () => {
+    const root = await tempRoot();
+    const storagePolicy = new FakeStoragePolicy();
+    const { videos, jobs, cleanup, jobService } = makeServices(
+      root,
+      1,
+      new DeferredExecution(),
+      storagePolicy as unknown as StoragePolicyService
+    );
+    videos.set(video(root));
+    const originalSet = jobs.set.bind(jobs);
+    let setCalls = 0;
+    vi.spyOn(jobs, "set").mockImplementation((job) => {
+      setCalls += 1;
+      if (setCalls === 2) throw new Error("repository write failed");
+      originalSet(job);
+    });
+    vi.spyOn(cleanup, "removeJobArtifacts").mockRejectedValue(new Error("cleanup failed"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    await expect(jobService.createPairJobs("video-1")).rejects.toThrow("repository write failed");
+
+    expect(storagePolicy.reservations.every((reservation) => reservation.released)).toBe(true);
+    expect(warn).toHaveBeenCalledWith("Unable to fully roll back pair job setup:", expect.any(Error));
+    warn.mockRestore();
   });
 
   it("cancels queued jobs before they start", async () => {

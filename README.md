@@ -201,9 +201,11 @@ symlink-backed media, and validates persisted source/output/sidecar paths before
 deletion. Public responses continue to omit filesystem paths, hashes, staging paths, canonical paths, and storage-area
 details.
 
-The Library view includes a compact Storage panel with managed bytes, available disk space when the platform reports it,
-the configured quota, uploads/outputs/temp/staging breakdowns, and reclaimable stale temporary data. The manual cleanup
-button removes stale temporary files only; it does not delete referenced uploads, completed outputs, or history records.
+The Library view includes a compact Storage panel with managed bytes, reserved bytes for queued or active work,
+available disk space when the platform reports it, the configured quota, uploads/outputs/temp/staging breakdowns, and
+reclaimable stale temporary data. Managed bytes are actual inventoried files in app storage; reserved bytes are shown
+separately and are still considered by the API when admitting more work. The manual cleanup button removes stale
+temporary files only; it does not delete referenced uploads, completed outputs, or history records.
 
 On Windows PowerShell, if script execution blocks `npm`, use `npm.cmd` instead:
 
