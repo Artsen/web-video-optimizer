@@ -10,6 +10,9 @@ build/
 .codex/
 coverage/
 data/
+playwright-report/
+test-results/
+.tmp/playwright-*
 *.log
 *.tmp
 ffmpeg-ui-source.zip

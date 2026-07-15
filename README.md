@@ -203,6 +203,15 @@ npm run test:integration:media
 
 The integration suite requires FFmpeg and FFprobe on PATH and uses generated temporary media.
 
+Run browser E2E and accessibility checks:
+
+```bash
+npm run test:e2e
+```
+
+This builds the app, starts isolated local API/web servers, runs Playwright Chromium tests, checks representative axe
+accessibility scans, and includes one small real-stack upload/encode/download smoke test.
+
 ## Repository Structure
 
 ```text
