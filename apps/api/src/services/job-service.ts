@@ -180,18 +180,49 @@ export class JobService {
     const existingModern = this.reusableJob(video, "encode", modern);
     const fallbackBytes = existingFallback ? 0 : estimateEncodeAllocation(video, fallback);
     const modernBytes = existingModern ? 0 : estimateEncodeAllocation(video, modern);
-    const requiredBytes = fallbackBytes + modernBytes;
-    if (requiredBytes > 0) await this.storagePolicy?.assertCanAllocate({ operation: "encode", requiredBytes });
-    const fallbackJob = existingFallback ?? this.createEncodeJob(video, fallback, "encode", "fallback-h264");
-    const modernJob = existingModern ?? this.createEncodeJob(video, modern, "encode", "modern-av1");
-    if (!existingFallback) {
-      this.trackReservation(fallbackJob.id, await this.reserve("encode", fallbackBytes));
-      this.enqueueMediaJob(fallbackJob, () => this.execution.runEncode(fallbackJob, video.storedPath));
+
+    const reservationRequests = [
+      ...(existingFallback ? [] : [fallbackBytes]),
+      ...(existingModern ? [] : [modernBytes])
+    ];
+    const pairReservations =
+      reservationRequests.length > 0 ? await this.reserveMany("encode", reservationRequests) : [];
+    const unassignedReservations = [...pairReservations];
+    const createdJobs: JobEntity[] = [];
+    let fallbackJob = existingFallback;
+    let modernJob = existingModern;
+    try {
+      if (!fallbackJob) {
+        fallbackJob = this.createEncodeJob(video, fallback, "encode", "fallback-h264", false);
+        createdJobs.push(fallbackJob);
+        this.trackReservation(fallbackJob.id, unassignedReservations.shift());
+      }
+      if (!modernJob) {
+        modernJob = this.createEncodeJob(video, modern, "encode", "modern-av1", false);
+        createdJobs.push(modernJob);
+        this.trackReservation(modernJob.id, unassignedReservations.shift());
+      }
+      if (createdJobs.length > 0) this.persistence.scheduleSave();
+      if (!existingFallback) {
+        if (!fallbackJob) throw new Error("Fallback pair job was not created");
+        const job = fallbackJob;
+        this.enqueueMediaJob(job, () => this.execution.runEncode(job, video.storedPath));
+      }
+      if (!existingModern) {
+        if (!modernJob) throw new Error("Modern pair job was not created");
+        const job = modernJob;
+        this.enqueueMediaJob(job, () => this.execution.runEncode(job, video.storedPath));
+      }
+    } catch (error) {
+      for (const reservation of unassignedReservations) reservation?.release();
+      try {
+        await this.rollbackNewPairJobs(createdJobs);
+      } catch (rollbackError) {
+        console.warn("Unable to fully roll back pair job setup:", rollbackError);
+      }
+      throw error;
     }
-    if (!existingModern) {
-      this.trackReservation(modernJob.id, await this.reserve("encode", modernBytes));
-      this.enqueueMediaJob(modernJob, () => this.execution.runEncode(modernJob, video.storedPath));
-    }
+    if (!fallbackJob || !modernJob) return undefined;
     return { jobs: [this.publicJob(fallbackJob), this.publicJob(modernJob)] };
   }
 
@@ -253,7 +284,13 @@ export class JobService {
     return true;
   }
 
-  createEncodeJob(video: VideoEntity, settings: OptimizationSettings, kind: JobKind, suffix = "optimized"): JobEntity {
+  createEncodeJob(
+    video: VideoEntity,
+    settings: OptimizationSettings,
+    kind: JobKind,
+    suffix = "optimized",
+    persist = true
+  ): JobEntity {
     const jobId = nanoid();
     const baseName = sanitizeFileName(settings.outputFilename || `${path.parse(video.originalName).name}-${suffix}`);
     const extension = settings.outputContainer === "webm" ? ".webm" : ".mp4";
@@ -274,7 +311,7 @@ export class JobService {
     };
 
     this.jobs.set(job);
-    this.persistence.scheduleSave();
+    if (persist) this.persistence.scheduleSave();
     return job;
   }
 
@@ -348,6 +385,28 @@ export class JobService {
     requiredBytes: number
   ): Promise<StorageReservation | undefined> {
     return this.storagePolicy?.reserve({ operation, requiredBytes });
+  }
+
+  private async reserveMany(
+    operation: "encode" | "sample" | "poster",
+    requiredBytes: number[]
+  ): Promise<Array<StorageReservation | undefined>> {
+    if (!this.storagePolicy) return requiredBytes.map(() => undefined);
+    return this.storagePolicy.reserveMany(requiredBytes.map((bytes) => ({ operation, requiredBytes: bytes })));
+  }
+
+  private async rollbackNewPairJobs(jobs: JobEntity[]): Promise<void> {
+    let mutated = false;
+    for (const job of jobs) {
+      this.scheduler.cancelQueued(job.id);
+      this.releaseReservation(job.id);
+      if (!this.scheduler.isRunning(job.id)) {
+        this.jobs.delete(job.id);
+        await this.cleanup.removeJobArtifacts(job);
+        mutated = true;
+      }
+    }
+    if (mutated) await this.persistence.save();
   }
 
   trackReservation(jobId: string, reservation: StorageReservation | undefined): void {
