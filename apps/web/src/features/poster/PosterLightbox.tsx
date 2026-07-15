@@ -1,4 +1,4 @@
-import type { PointerEvent } from "react";
+import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from "react";
 import type { JobDto } from "@local-video-optimizer/contracts";
 import { Download, X, ZoomIn, ZoomOut } from "lucide-react";
 import { jobDownloadUrl } from "../../api/urls";
@@ -28,12 +28,41 @@ export function PosterLightbox({
   onMovePan,
   onStopPan
 }: PosterLightboxProps) {
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => previousFocusRef.current?.focus();
+  }, []);
+
+  function trapDialogFocus(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key !== "Tab") return;
+    const focusable = Array.from(
+      dialogRef.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []
+    );
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   return (
     <div
       className="lightbox-backdrop"
       role="dialog"
       aria-modal="true"
       aria-label="Poster preview"
+      ref={dialogRef}
+      tabIndex={-1}
+      onKeyDown={trapDialogFocus}
       onWheel={(event) => {
         event.preventDefault();
         event.stopPropagation();
