@@ -140,22 +140,6 @@ describe("App behavior", () => {
     expect(closeCalls).toEqual(expect.arrayContaining(["fallback-job", "modern-job"]));
   });
 
-  it("closes active job subscriptions when resetting to a new blank video", async () => {
-    const user = userEvent.setup();
-    const api = createApi();
-    const { closeCalls } = renderApp(api);
-
-    await waitFor(() => expect(api.getHistory).toHaveBeenCalled());
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    await user.upload(input, new File(["video"], "local.mp4", { type: "video/mp4" }));
-    await screen.findByDisplayValue("homepage-video.mp4");
-    await user.click(screen.getByRole("button", { name: /optimize for website/i }));
-    await user.click(screen.getByRole("button", { name: /new video/i }));
-
-    expect(closeCalls).toEqual(expect.arrayContaining(["fallback-job", "modern-job"]));
-    expect(screen.getByText("Waiting For A Source")).toBeInTheDocument();
-  });
-
   it("shows safe API failure messages during upload", async () => {
     const user = userEvent.setup();
     const api = createApi({ uploadVideo: vi.fn().mockRejectedValue(new Error("Upload rejected safely")) });

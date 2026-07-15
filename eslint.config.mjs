@@ -30,15 +30,6 @@ export default tseslint.config(
     }
   },
   {
-    files: ["e2e/**/*.{ts,mjs}", "playwright.config.ts"],
-    languageOptions: {
-      globals: {
-        ...globals.node,
-        ...globals.browser
-      }
-    }
-  },
-  {
     files: ["apps/api/src/**/*.ts"],
     languageOptions: {
       globals: {
@@ -313,7 +304,7 @@ export default tseslint.config(
       "no-restricted-imports": [
         "error",
         {
-          patterns: ["../testing/**", "../../testing/**", "../../../testing/**", "../../../../e2e/**"]
+          patterns: ["../testing/**", "../../testing/**", "../../../testing/**"]
         }
       ]
     }
