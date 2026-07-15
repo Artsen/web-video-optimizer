@@ -91,29 +91,6 @@ npm run test:integration:media
 This command builds the packages, API, and web app first, then starts the compiled API on isolated local ports with
 temporary `STORAGE_ROOT` directories. It requires `ffmpeg` and `ffprobe` on `PATH`.
 
-Run the browser E2E suite:
-
-```bash
-npx playwright install chromium
-npm run test:e2e
-```
-
-This command builds the repository, starts the compiled API on `127.0.0.1:4100`, serves the production web build on
-`127.0.0.1:4174`, and runs Playwright Chromium tests. The suite uses route-mocked app flows for deterministic UI,
-keyboard, console, failed-request, and axe accessibility coverage, plus one narrow `@real-stack` smoke test that uploads
-and encodes a generated tiny video through the compiled API.
-
-Useful browser-test variants:
-
-```bash
-npm run test:e2e:real
-npm run test:e2e:headed
-npm run test:e2e:ui
-npm run test:e2e:report
-```
-
-Playwright artifacts are written to `test-results/` and `playwright-report/` and are intentionally ignored by Git.
-
 ## Current Test Scope
 
 The initial unit tests cover pure behavior extracted from the current API and web entry files:
@@ -272,10 +249,11 @@ The real symlink storage-boundary unit test is platform-conditional:
 
 ## Not Covered Yet
 
+- Browser rendering behavior
 - Subtitle generation through whisper.cpp
 - YouTube importing through yt-dlp
 - Live-network YouTube importing through yt-dlp
-- Full browser visual-regression screenshot comparison
+- Browser-driven upload/download smoke automation
 
 ## Phase 7A Frontend Tests
 
@@ -305,23 +283,3 @@ The API-client tests verify request methods, JSON bodies, multipart upload behav
 Feature tests exercise upload/file-selection behavior, current-job progress/cancellation rendering, poster lightbox controls, and media synchronization behavior without requiring real media decoding. jsdom does not decode video/audio, so production-browser smoke testing is still required for playback, drag-and-drop feel, lightbox gestures, captions preview, and browser console validation.
 
 Real-media integration remains an API-level regression suite and should be run twice consecutively for Phase 7A review because recent phases exposed timing-sensitive shutdown/recovery behavior.
-
-## Phase 7B Browser E2E And Accessibility
-
-Phase 7B adds Playwright browser coverage with a console and failed-request gate. Tests fail on unexpected browser
-`pageerror`, console errors, or failed requests, while allowing normal browser-aborted media/download requests.
-
-Coverage includes:
-
-- Empty app shell load, navigation, theme toggle, narrow viewport overflow guard, and axe scan.
-- Poster lightbox keyboard focus, Tab trapping, Escape close, focus restoration, and axe scan.
-- Mocked upload, Optimize For Website, current settings payload verification, job-event subscription, completed outputs,
-  poster preview, and download behavior.
-- Mocked custom-export validation failure presentation without unhandled browser errors.
-- History restoration, caption editing, package creation, bulk delete request wiring, and representative axe scan.
-- A compiled-stack smoke test using generated real media for upload, metadata inspection, H.264 export, source/output
-  download, and cleanup.
-
-The mocked tests intentionally do not decode real media. The `@real-stack` test verifies the browser can drive the
-compiled API, but it remains narrow so CI stays fast and deterministic. Manual smoke testing is still useful for long
-videos, real subtitle generation through whisper.cpp, and real YouTube imports through yt-dlp.

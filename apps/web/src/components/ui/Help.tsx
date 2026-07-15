@@ -3,8 +3,8 @@ import { HelpCircle } from "lucide-react";
 
 export function Help({ text }: { text: string }) {
   return (
-    <span className="help" title={text}>
-      <HelpCircle size={15} aria-label={text} role="img" />
+    <span className="help" title={text} aria-label={text}>
+      <HelpCircle size={15} />
     </span>
   );
 }

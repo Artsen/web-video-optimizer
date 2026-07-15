@@ -6,14 +6,14 @@
   --panel-strong: #1f1f1f;
   --text: #ececec;
   --muted: #b4b4b4;
-  --subtle: #bdbdbd;
+  --subtle: #8f8f8f;
   --border: rgba(255, 255, 255, 0.1);
   --border-strong: rgba(255, 255, 255, 0.18);
-  --primary: #20d7a6;
-  --primary-strong: #08745c;
-  --primary-soft: rgba(32, 215, 166, 0.08);
-  --success: #20d7a6;
-  --success-soft: rgba(32, 215, 166, 0.08);
+  --primary: #10a37f;
+  --primary-strong: #0d8f70;
+  --primary-soft: rgba(16, 163, 127, 0.16);
+  --success: #10a37f;
+  --success-soft: rgba(16, 163, 127, 0.14);
   --warning: #d6a84f;
   --warning-soft: rgba(214, 168, 79, 0.14);
   --danger: #ff6b6b;
@@ -47,10 +47,10 @@
   --subtle: #7d7d7d;
   --border: rgba(0, 0, 0, 0.1);
   --border-strong: rgba(0, 0, 0, 0.16);
-  --primary: #075f4b;
-  --primary-strong: #075f4b;
+  --primary: #10a37f;
+  --primary-strong: #0d8f70;
   --primary-soft: rgba(16, 163, 127, 0.1);
-  --success: #075f4b;
+  --success: #0d8f70;
   --success-soft: #e8f6f1;
   --warning: #986f22;
   --warning-soft: #fbf2df;
@@ -1035,7 +1035,7 @@ select {
 
 .primary {
   color: #ffffff;
-  background: var(--primary-strong);
+  background: var(--primary);
   box-shadow: none;
 }
 
