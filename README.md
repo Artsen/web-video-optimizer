@@ -37,6 +37,7 @@ Videos stay on your machine. The app runs a local React UI and local API, stores
 - Optional remuxing to embed generated subtitle tracks into MP4/WebM outputs
 - Job cancellation
 - Persistent history manifest with individual and bulk cleanup
+- Storage status, low-space warnings, capacity-aware uploads/jobs, and safe temporary cleanup
 - FFmpeg encoder capability checks
 - Estimated output size
 - Local FFmpeg processing
@@ -159,6 +160,25 @@ $env:UPLOAD_FILE_SIZE_LIMIT_BYTES="2147483648"
 The upload limit accepts positive integer byte values only. It is separate from `JSON_BODY_LIMIT_BYTES` and
 `MAX_CAPTURED_PROCESS_OUTPUT_BYTES`.
 
+The API also keeps a configurable free-space reserve before admitting uploads, processing jobs, imports, or website
+package creation:
+
+```powershell
+$env:MIN_FREE_STORAGE_BYTES="536870912"
+$env:MAX_MANAGED_STORAGE_BYTES="0"
+$env:TEMP_FILE_MAX_AGE_MS="86400000"
+$env:HOUSEKEEPING_INTERVAL_MS="3600000"
+```
+
+`MIN_FREE_STORAGE_BYTES` is the amount of filesystem space the app tries to leave untouched. `MAX_MANAGED_STORAGE_BYTES`
+is optional; `0` means no app-managed quota. `TEMP_FILE_MAX_AGE_MS` controls stale temporary and upload-staging cleanup,
+and `HOUSEKEEPING_INTERVAL_MS` controls the background cleanup cadence. Durable source videos and completed exports are
+not automatically deleted; use the Library/history controls when you want to remove them.
+
+Upload failures distinguish the configured maximum file size from current disk pressure. A file over
+`UPLOAD_FILE_SIZE_LIMIT_BYTES` returns `413 UPLOAD_TOO_LARGE`. A request the machine cannot safely store right now
+returns `507 INSUFFICIENT_STORAGE`.
+
 ## Upload Admission And Storage Safety
 
 The API uses Multer 2 with route-scoped disk staging for `POST /api/videos`. Browser upload behavior is unchanged: the
@@ -180,6 +200,10 @@ Storage paths are contained within managed directories under `STORAGE_ROOT`. The
 symlink-backed media, and validates persisted source/output/sidecar paths before restoration, streaming, cleanup, or
 deletion. Public responses continue to omit filesystem paths, hashes, staging paths, canonical paths, and storage-area
 details.
+
+The Library view includes a compact Storage panel with managed bytes, available disk space when the platform reports it,
+the configured quota, uploads/outputs/temp/staging breakdowns, and reclaimable stale temporary data. The manual cleanup
+button removes stale temporary files only; it does not delete referenced uploads, completed outputs, or history records.
 
 On Windows PowerShell, if script execution blocks `npm`, use `npm.cmd` instead:
 
@@ -244,6 +268,8 @@ docs/
 - `POST /api/jobs/:id/reveal` opens the generated file in the local file manager
 - `POST /api/jobs/:id/cancel` cancels a running job
 - `GET /api/capabilities` reports available FFmpeg encoders
+- `GET /api/storage` reports safe local storage status
+- `POST /api/storage/cleanup` removes stale temporary files only and returns updated storage status
 - `GET /api/history` returns current session files and jobs
 - `POST /api/history/delete` deletes selected files/jobs
 - `DELETE /api/videos/:id` removes temporary files for a video

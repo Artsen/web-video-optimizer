@@ -45,10 +45,14 @@ export const subtitleJob = createJob("subtitle-job", "subtitle", "completed", {
   outputSize: 4_000
 });
 
-export async function installMockApi(page: Page, options: { withHistory?: boolean } = {}) {
+export async function installMockApi(
+  page: Page,
+  options: { withHistory?: boolean; storage?: Record<string, unknown> } = {}
+) {
   const requests: { method: string; url: string; postData: string | null }[] = [];
   let hasVideo = options.withHistory ?? false;
   let historyJobs = hasVideo ? [fallbackJob, modernJob, posterJob, subtitleJob] : [];
+  let currentStorage = storageStatus(options.storage);
 
   await page.addInitScript(() => {
     type Handler = (event: MessageEvent) => void;
@@ -87,6 +91,18 @@ export async function installMockApi(page: Page, options: { withHistory?: boolea
 
     if (url.pathname === "/api/capabilities") {
       await json(route, { libx264: true, libaomAv1: true, libvpxVp9: true, aac: true, libopus: true, ytDlp: true });
+      return;
+    }
+    if (url.pathname === "/api/storage" && request.method() === "GET") {
+      await json(route, currentStorage);
+      return;
+    }
+    if (url.pathname === "/api/storage/cleanup" && request.method() === "POST") {
+      currentStorage = storageStatus({
+        ...currentStorage,
+        cleanup: { staleTemporaryBytes: 0, staleTemporaryFileCount: 0 }
+      });
+      await json(route, { removedBytes: 250_000, removedFileCount: 1, storage: currentStorage });
       return;
     }
     if (url.pathname === "/api/history" && request.method() === "GET") {
@@ -211,6 +227,25 @@ function createJob(
     completedAt: status === "completed" ? "2026-07-14T00:00:02.000Z" : undefined,
     ...overrides,
     settings
+  };
+}
+
+function storageStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    managedBytes: 11_250_000,
+    reservedBytes: 0,
+    availableBytes: 50_000_000,
+    totalFilesystemBytes: 100_000_000,
+    minimumFreeBytes: 10_000_000,
+    pressure: "normal",
+    areas: {
+      uploads: { bytes: 10_000_000, fileCount: 1 },
+      outputs: { bytes: 1_000_000, fileCount: 2 },
+      temporary: { bytes: 250_000, fileCount: 1 },
+      staging: { bytes: 0, fileCount: 0 }
+    },
+    cleanup: { staleTemporaryBytes: 250_000, staleTemporaryFileCount: 1 },
+    ...overrides
   };
 }
 

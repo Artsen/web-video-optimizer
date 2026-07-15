@@ -10,7 +10,8 @@ import type { ManifestLoadResult, ManifestStore } from "../persistence/manifest-
 import { FakeProcessRunner } from "../infrastructure/processes/test/fake-process-runner.js";
 import { InMemoryJobRepository } from "../repositories/in-memory-job-repository.js";
 import { InMemoryVideoRepository } from "../repositories/in-memory-video-repository.js";
-import { createProductionRuntime } from "./production-runtime.js";
+import { createProductionRuntime as createRealProductionRuntime } from "./production-runtime.js";
+import type { ProductionRuntime, ProductionRuntimeDependencies } from "./production-runtime.js";
 
 const tempDirs: string[] = [];
 
@@ -52,12 +53,23 @@ function config(storageRoot: string): ApiConfig {
     uploadFileSizeLimitBytes: 1234,
     maxConcurrentMediaJobs: 1,
     shutdownGracePeriodMs: 15000,
+    minFreeStorageBytes: 536870912,
+    maxManagedStorageBytes: 0,
+    tempFileMaxAgeMs: 86400000,
+    housekeepingIntervalMs: 3600000,
     mediaProcessTimeoutMs: 1_800_000,
     toolCommandTimeoutMs: 60_000,
     processKillGracePeriodMs: 5_000,
     maxCapturedProcessOutputBytes: 4 * 1024 * 1024,
     ytDlpJsRuntime: "node:test"
   };
+}
+
+function createProductionRuntime(
+  apiConfig: ApiConfig,
+  dependencies: ProductionRuntimeDependencies = {}
+): ProductionRuntime {
+  return createRealProductionRuntime(apiConfig, { ...dependencies, startHousekeeping: false });
 }
 
 function video(storageRoot: string, overrides: Partial<VideoEntity> = {}): VideoEntity {
@@ -359,8 +371,8 @@ describe("createProductionRuntime state isolation", () => {
       { videoRepository, jobRepository, manifestStore, processRunner }
     );
 
-    const running = runtime.createOptimizationJob(source.id, { outputFilename: "running" }).job!;
-    const queued = runtime.createOptimizationJob(source.id, { outputFilename: "queued" }).job!;
+    const running = (await runtime.createOptimizationJob(source.id, { outputFilename: "running" })).job!;
+    const queued = (await runtime.createOptimizationJob(source.id, { outputFilename: "queued" })).job!;
     const firstShutdown = runtime.shutdown();
     const secondShutdown = runtime.shutdown();
 

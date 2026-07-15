@@ -11,6 +11,8 @@ import type { VideoDownloader } from "../infrastructure/tools/yt-dlp-adapter.js"
 import type { VideoRepository, JobRepository } from "../repositories/repository-types.js";
 import type { UploadedVideoFile, StreamDescriptor } from "../runtime/api-runtime.js";
 import type { StorageBoundary } from "../storage/storage-boundary.js";
+import type { StoragePolicyService } from "../storage/storage-policy-service.js";
+import { estimateImportAllocation } from "../storage/allocation-estimates.js";
 import type { MediaAdmissionService } from "../uploads/media-admission-service.js";
 import type { CleanupService } from "./cleanup-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
@@ -26,7 +28,9 @@ export class VideoService {
     private readonly uploadDir: string,
     private readonly tmpDir: string,
     private readonly admission?: MediaAdmissionService,
-    private readonly storage?: StorageBoundary
+    private readonly storage?: StorageBoundary,
+    private readonly storagePolicy?: StoragePolicyService,
+    private readonly uploadLimitBytes = 0
   ) {}
 
   async createFromUpload(file: UploadedVideoFile): Promise<VideoRecordDto> {
@@ -41,12 +45,22 @@ export class VideoService {
   }
 
   async createFromUrl(url: string): Promise<VideoRecordDto> {
-    const importPath = await this.downloader.download(url, this.tmpDir);
-    return toVideoRecordDto(
-      this.admission
-        ? await this.admission.admit({ path: importPath, originalName: path.basename(importPath), area: "tmp" })
-        : await this.createRecordFromFile(importPath, path.basename(importPath))
-    );
+    const reservation = await this.storagePolicy?.reserve({
+      operation: "import",
+      requiredBytes: estimateImportAllocation(this.uploadLimitBytes)
+    });
+    let importPath: string | undefined;
+    try {
+      importPath = await this.downloader.download(url, this.tmpDir);
+      return toVideoRecordDto(
+        this.admission
+          ? await this.admission.admit({ path: importPath, originalName: path.basename(importPath), area: "tmp" })
+          : await this.createRecordFromFile(importPath, path.basename(importPath))
+      );
+    } finally {
+      reservation?.release();
+      if (importPath) await this.storage?.removeFile("tmp", importPath).catch(() => undefined);
+    }
   }
 
   get(id: string): VideoRecordDto | undefined {

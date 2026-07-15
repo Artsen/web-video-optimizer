@@ -238,8 +238,8 @@ describe("service media scheduling", () => {
     const source = video(root);
     videos.set(source);
 
-    const first = jobService.createOptimizationJob(source.id, settings({ outputFilename: "first" })).job!;
-    const second = jobService.createOptimizationJob(source.id, settings({ outputFilename: "second" })).job!;
+    const first = (await jobService.createOptimizationJob(source.id, settings({ outputFilename: "first" }))).job!;
+    const second = (await jobService.createOptimizationJob(source.id, settings({ outputFilename: "second" }))).job!;
 
     expect(execution.encodeCalls.map((call) => call.job.id)).toEqual([first.id]);
     expect(scheduler.getSnapshot()).toMatchObject({ queuedJobIds: [second.id], runningJobIds: [first.id] });
@@ -263,8 +263,8 @@ describe("service media scheduling", () => {
     const source = video(root);
     videos.set(source);
 
-    const sample = jobService.createSampleJob(source.id, settings({ outputFilename: "sample-a" }), 3).job!;
-    const poster = jobService.createPosterJob(source.id, 1)!;
+    const sample = (await jobService.createSampleJob(source.id, settings({ outputFilename: "sample-a" }), 3)).job!;
+    const poster = (await jobService.createPosterJob(source.id, 1))!;
     expect(execution.encodeCalls.map((call) => call.job.id)).toEqual([sample.id]);
     expect(execution.posterCalls).toHaveLength(0);
     expect(scheduler.getSnapshot().queuedJobIds).toEqual([poster.id]);
@@ -300,7 +300,7 @@ describe("service media scheduling", () => {
     jobs.set(videoOutput);
     jobs.set(subtitles);
 
-    const mux = captionService.createMuxSubtitleJob(videoOutput.id, subtitles.id).job!;
+    const mux = (await captionService.createMuxSubtitleJob(videoOutput.id, subtitles.id)).job!;
     expect(execution.muxCalls).toHaveLength(0);
     expect(scheduler.getSnapshot().queuedJobIds).toEqual([mux.id]);
 
@@ -324,16 +324,16 @@ describe("service media scheduling", () => {
     const source = video(root);
     one.videos.set(source);
 
-    expect(one.jobService.createOptimizationJob("missing", settings()).job).toBeUndefined();
+    expect((await one.jobService.createOptimizationJob("missing", settings())).job).toBeUndefined();
     expect(one.scheduler.getSnapshot()).toMatchObject({ queuedJobIds: [], runningJobIds: [] });
 
     const reusable = completedJob(root, { status: "queued" });
     one.jobs.set(reusable);
-    expect(one.jobService.createOptimizationJob(source.id, settings()).job?.id).toBe(reusable.id);
+    expect((await one.jobService.createOptimizationJob(source.id, settings())).job?.id).toBe(reusable.id);
     expect(executionOne.encodeCalls).toHaveLength(0);
 
     one.jobs.delete(reusable.id);
-    const pair = one.jobService.createPairJobs(source.id)!;
+    const pair = (await one.jobService.createPairJobs(source.id))!;
     expect(executionOne.encodeCalls).toHaveLength(1);
     expect(one.scheduler.getSnapshot()).toMatchObject({
       queuedJobIds: [pair.jobs[1].id],
@@ -343,7 +343,7 @@ describe("service media scheduling", () => {
     const executionTwo = new DeferredExecution();
     const two = makeServices(root, 2, executionTwo);
     two.videos.set(video(root, { id: "video-2" }));
-    const pairTwo = two.jobService.createPairJobs("video-2")!;
+    const pairTwo = (await two.jobService.createPairJobs("video-2"))!;
     expect(executionTwo.encodeCalls.map((call) => call.job.id)).toEqual(pairTwo.jobs.map((job) => job.id));
     expect(two.scheduler.getSnapshot().queuedJobIds).toEqual([]);
   });
@@ -355,8 +355,8 @@ describe("service media scheduling", () => {
     const source = video(root);
     videos.set(source);
 
-    const first = jobService.createOptimizationJob(source.id, settings({ outputFilename: "first" })).job!;
-    const second = jobService.createOptimizationJob(source.id, settings({ outputFilename: "second" })).job!;
+    const first = (await jobService.createOptimizationJob(source.id, settings({ outputFilename: "first" }))).job!;
+    const second = (await jobService.createOptimizationJob(source.id, settings({ outputFilename: "second" }))).job!;
 
     await expect(jobService.cancel(second.id)).resolves.toMatchObject({ id: second.id, status: "canceled" });
     expect(jobs.get(second.id)).toBeUndefined();
@@ -397,8 +397,8 @@ describe("fake process scheduler integration", () => {
     const source = video(root);
     videos.set(source);
 
-    const first = service.createOptimizationJob(source.id, settings({ outputFilename: "first" })).job!;
-    const second = service.createOptimizationJob(source.id, settings({ outputFilename: "second" })).job!;
+    const first = (await service.createOptimizationJob(source.id, settings({ outputFilename: "first" }))).job!;
+    const second = (await service.createOptimizationJob(source.id, settings({ outputFilename: "second" }))).job!;
 
     expect(runner.calls).toHaveLength(1);
     expect(jobs.get(first.id)?.status).toBe("running");
@@ -448,8 +448,9 @@ describe("fake process scheduler integration", () => {
     const source = video(root);
     videos.set(source);
 
-    const failed = service.createOptimizationJob(source.id, settings({ outputFilename: "failed" })).job!;
-    const afterFailure = service.createOptimizationJob(source.id, settings({ outputFilename: "after-failure" })).job!;
+    const failed = (await service.createOptimizationJob(source.id, settings({ outputFilename: "failed" }))).job!;
+    const afterFailure = (await service.createOptimizationJob(source.id, settings({ outputFilename: "after-failure" })))
+      .job!;
     runner.latest().emitClose(2);
     await settleProcesses();
     expect(jobs.get(failed.id)?.status).toBe("failed");
@@ -461,8 +462,10 @@ describe("fake process scheduler integration", () => {
     expect(jobs.get(afterFailure.id)?.status).toBe("failed");
     expect(jobs.get(afterFailure.id)?.message).toBe("spawn exploded");
 
-    const canceled = service.createOptimizationJob(source.id, settings({ outputFilename: "cancel-running" })).job!;
-    const afterCancel = service.createOptimizationJob(source.id, settings({ outputFilename: "after-cancel" })).job!;
+    const canceled = (await service.createOptimizationJob(source.id, settings({ outputFilename: "cancel-running" })))
+      .job!;
+    const afterCancel = (await service.createOptimizationJob(source.id, settings({ outputFilename: "after-cancel" })))
+      .job!;
     await expect(service.cancel(canceled.id)).resolves.toMatchObject({ status: "canceled" });
     expect(runner.latest().killedWith).toBe("SIGTERM");
     runner.latest().emitError(new Error("late cancellation error"));
@@ -515,10 +518,9 @@ describe("fake process scheduler integration", () => {
       processPolicy
     );
 
-    const subtitles = captionService.createSubtitleJob(source.id).job!;
-    const encode = jobService.createOptimizationJob(
-      source.id,
-      settings({ outputFilename: "queued-behind-subtitles" })
+    const subtitles = (await captionService.createSubtitleJob(source.id)).job!;
+    const encode = (
+      await jobService.createOptimizationJob(source.id, settings({ outputFilename: "queued-behind-subtitles" }))
     ).job!;
     await flush();
 
@@ -539,6 +541,8 @@ describe("fake process scheduler integration", () => {
 
     await writeFile(jobs.get(subtitles.id)!.outputPath!, "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello");
     runner.latest().emitClose(0);
+    await settleProcesses();
+    await flush();
     await settleProcesses();
 
     expect(jobs.get(subtitles.id)?.status).toBe("completed");
@@ -590,10 +594,9 @@ describe("fake process scheduler integration", () => {
       processPolicy
     );
 
-    const subtitles = captionService.createSubtitleJob(source.id).job!;
-    const encode = jobService.createOptimizationJob(
-      source.id,
-      settings({ outputFilename: "after-subtitle-cancel" })
+    const subtitles = (await captionService.createSubtitleJob(source.id)).job!;
+    const encode = (
+      await jobService.createOptimizationJob(source.id, settings({ outputFilename: "after-subtitle-cancel" }))
     ).job!;
     await flush();
 
@@ -662,8 +665,9 @@ describe("fake process scheduler integration", () => {
         timeoutPolicy
       );
 
-      const subtitles = captionService.createSubtitleJob(source.id).job!;
-      const encode = jobService.createOptimizationJob(source.id, settings({ outputFilename: "after-timeout" })).job!;
+      const subtitles = (await captionService.createSubtitleJob(source.id)).job!;
+      const encode = (await jobService.createOptimizationJob(source.id, settings({ outputFilename: "after-timeout" })))
+        .job!;
       await flush();
 
       expect(jobs.get(subtitles.id)?.status).toBe("running");

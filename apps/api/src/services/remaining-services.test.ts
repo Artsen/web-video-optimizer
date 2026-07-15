@@ -230,7 +230,7 @@ describe("JobService", () => {
     const source = video(root);
     videos.set(source);
 
-    const result = service.createOptimizationJob(source.id, settings({ outputFilename: "custom name" }));
+    const result = await service.createOptimizationJob(source.id, settings({ outputFilename: "custom name" }));
 
     expect(result.status).toBe(202);
     expect(execution.encodeCalls).toHaveLength(1);
@@ -250,17 +250,17 @@ describe("JobService", () => {
     const reusable = job(root, { id: "queued", status: "queued" });
     jobs.set(reusable);
 
-    expect(service.createOptimizationJob(source.id, settings()).job?.id).toBe("queued");
+    expect((await service.createOptimizationJob(source.id, settings())).job?.id).toBe("queued");
     reusable.status = "running";
-    expect(service.createOptimizationJob(source.id, settings()).job?.id).toBe("queued");
+    expect((await service.createOptimizationJob(source.id, settings())).job?.id).toBe("queued");
     reusable.status = "completed";
     await writeFile(reusable.outputPath!, "output");
-    expect(service.createOptimizationJob(source.id, settings()).status).toBe(200);
+    expect((await service.createOptimizationJob(source.id, settings())).status).toBe(200);
     reusable.status = "failed";
-    const failedResult = service.createOptimizationJob(source.id, settings());
+    const failedResult = await service.createOptimizationJob(source.id, settings());
     expect(failedResult.job?.id).not.toBe("queued");
     reusable.status = "canceled";
-    const canceledResult = service.createOptimizationJob(source.id, settings());
+    const canceledResult = await service.createOptimizationJob(source.id, settings());
     expect(canceledResult.job?.id).not.toBe("queued");
     expect(execution.encodeCalls.length).toBeGreaterThan(0);
   });
@@ -271,15 +271,15 @@ describe("JobService", () => {
     const source = video(root, { metadata: { ...video(root).metadata, durationSeconds: 3 } });
     videos.set(source);
 
-    const sample = service.createSampleJob(source.id, settings(), 99).job!;
+    const sample = (await service.createSampleJob(source.id, settings(), 99)).job!;
     expect(sample.outputFileName).toBe("source-file-sample.mp4");
     expect(execution.encodeCalls.at(-1)?.durationLimitSeconds).toBe(3);
 
-    const poster = service.createPosterJob(source.id, -10)!;
+    const poster = (await service.createPosterJob(source.id, -10))!;
     expect(poster.outputFileName).toBe("source-file-poster.webp");
     expect(execution.posterCalls.at(-1)?.atSeconds).toBe(0);
 
-    const pair = service.createPairJobs(source.id)!;
+    const pair = (await service.createPairJobs(source.id))!;
     expect(pair.jobs.map((item) => item.outputFileName)).toEqual([
       "source-file-fallback-h264.mp4",
       "source-file-modern-av1.webm"
@@ -599,21 +599,21 @@ describe("CaptionService", () => {
       processPolicy
     );
 
-    expect(service.createSubtitleJob("missing")).toEqual({ status: 404, error: "Video not found" });
+    expect(await service.createSubtitleJob("missing")).toEqual({ status: 404, error: "Video not found" });
     videos.set(
       video(root, {
         id: "silent",
         metadata: { ...video(root).metadata, trackCounts: { video: 1, audio: 0, subtitle: 0 } }
       })
     );
-    expect(service.createSubtitleJob("silent")).toEqual({
+    expect(await service.createSubtitleJob("silent")).toEqual({
       status: 400,
       error: "No audio track found. Subtitles cannot be generated."
     });
 
     const source = video(root);
     videos.set(source);
-    const result = service.createSubtitleJob(source.id);
+    const result = await service.createSubtitleJob(source.id);
     expect(result.status).toBe(202);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(jobs.get(result.job!.id)).toMatchObject({
@@ -702,13 +702,13 @@ describe("CaptionService", () => {
     await expect(readFile(captions.outputPath!, "utf8")).resolves.toMatch(/^WEBVTT/);
     await expect(service.updateCaptions(captions.id, "not captions")).rejects.toThrow();
 
-    expect(service.createMuxSubtitleJob("missing", captions.id)).toEqual({
+    expect(await service.createMuxSubtitleJob("missing", captions.id)).toEqual({
       status: 404,
       error: "Completed video output not found"
     });
     const videoJob = job(root, { id: "video-output" });
     jobs.set(videoJob);
-    const mux = service.createMuxSubtitleJob(videoJob.id, captions.id);
+    const mux = await service.createMuxSubtitleJob(videoJob.id, captions.id);
     expect(mux.status).toBe(202);
     expect(execution.muxCalls).toHaveLength(1);
   });

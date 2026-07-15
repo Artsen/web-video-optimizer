@@ -8,6 +8,10 @@ services:
       PORT: 4000
       CORS_ORIGIN: http://localhost:5173
       STORAGE_ROOT: /app/data
+      MIN_FREE_STORAGE_BYTES: 536870912
+      MAX_MANAGED_STORAGE_BYTES: 0
+      TEMP_FILE_MAX_AGE_MS: 86400000
+      HOUSEKEEPING_INTERVAL_MS: 3600000
     volumes:
       - video_data:/app/data
     ports:

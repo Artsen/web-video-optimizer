@@ -11,6 +11,7 @@ import type { CleanupService } from "./cleanup-service.js";
 import type { JobLifecycle } from "./job-lifecycle-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
 import { commandPreview } from "./helpers/command-preview.js";
+import { insufficientStorageForOperation, isNoSpaceError } from "../storage/storage-capacity.js";
 
 export function buildMuxSubtitleArgs(
   inputPath: string,
@@ -87,7 +88,8 @@ export class JobExecutionService implements JobExecutor {
           return;
         }
         if (code !== 0) {
-          if (this.lifecycle.fail(job, `FFmpeg exited with code ${code}`)) {
+          const failure = this.processFailureMessage(job, "encode", `FFmpeg exited with code ${code}`);
+          if (this.lifecycle.fail(job, failure)) {
             await this.cleanup.removeJobArtifacts(job);
             await this.persistence.save();
           }
@@ -150,7 +152,8 @@ export class JobExecutionService implements JobExecutor {
           return;
         }
         if (code !== 0) {
-          if (this.lifecycle.fail(job, `FFmpeg exited with code ${code}`)) {
+          const failure = this.processFailureMessage(job, "poster", `FFmpeg exited with code ${code}`);
+          if (this.lifecycle.fail(job, failure)) {
             await this.cleanup.removeJobArtifacts(job);
             await this.persistence.save();
           }
@@ -211,7 +214,8 @@ export class JobExecutionService implements JobExecutor {
           return;
         }
         if (code !== 0) {
-          if (this.lifecycle.fail(job, `FFmpeg exited with code ${code}`)) {
+          const failure = this.processFailureMessage(job, "mux", `FFmpeg exited with code ${code}`);
+          if (this.lifecycle.fail(job, failure)) {
             await this.cleanup.removeJobArtifacts(job);
             await this.persistence.save();
           }
@@ -233,6 +237,11 @@ export class JobExecutionService implements JobExecutor {
         job.message = text.split("\n").at(-1)?.slice(0, 220) || job.message;
       }
     });
+  }
+
+  private processFailureMessage(job: JobEntity, operation: "encode" | "poster" | "mux", fallback: string): string {
+    if (isNoSpaceError({ message: job.message })) return insufficientStorageForOperation(operation).message;
+    return fallback;
   }
 
   private settleOnProcessEvents(

@@ -34,11 +34,18 @@ import { JobService } from "../services/job-service.js";
 import { PackageService } from "../services/package-service.js";
 import { ManifestStatePersistenceService } from "../services/state-persistence-service.js";
 import { VideoService } from "../services/video-service.js";
+import { StorageHousekeepingService } from "../storage/housekeeping-service.js";
+import { ManagedStorageInventoryService } from "../storage/managed-storage-inventory.js";
 import { StorageBoundary } from "../storage/storage-boundary.js";
+import { NodeStatfsCapacityProvider } from "../storage/storage-capacity.js";
+import type { StorageCapacityProvider } from "../storage/storage-capacity.js";
+import { StoragePolicyService } from "../storage/storage-policy-service.js";
+import { StorageReservationManager } from "../storage/storage-reservations.js";
 import { MediaAdmissionService } from "../uploads/media-admission-service.js";
 import type { ApiRuntime, UploadedVideoFile } from "./api-runtime.js";
 
 export interface ProductionRuntime extends ApiRuntime {
+  storagePolicy: StoragePolicyService;
   shutdown(): Promise<void>;
 }
 
@@ -55,6 +62,8 @@ export type ProductionRuntimeDependencies = {
   videoDownloader?: VideoDownloader;
   fileRevealer?: FileRevealer;
   jobScheduler?: JobScheduler;
+  storageCapacityProvider?: StorageCapacityProvider;
+  startHousekeeping?: boolean;
 };
 
 export function createProductionRuntime(
@@ -93,6 +102,17 @@ export function createProductionRuntime(
     tmp: apiConfig.tmpDir,
     "upload-staging": apiConfig.uploadStagingDir
   });
+  const storageCapacityProvider = dependencies.storageCapacityProvider ?? new NodeStatfsCapacityProvider();
+  const storageReservations = new StorageReservationManager();
+  const storageInventory = new ManagedStorageInventoryService(storage);
+  const storagePolicy = new StoragePolicyService(
+    apiConfig,
+    storage,
+    storageCapacityProvider,
+    storageInventory,
+    storageReservations
+  );
+  const housekeeping = new StorageHousekeepingService(storagePolicy, apiConfig.housekeepingIntervalMs);
 
   const statePersistence = new ManifestStatePersistenceService(videoRepository, jobRepository, manifestStore, {
     tmpDir: apiConfig.tmpDir,
@@ -129,7 +149,9 @@ export function createProductionRuntime(
     apiConfig.uploadDir,
     apiConfig.tmpDir,
     admissionService,
-    storage
+    storage,
+    storagePolicy,
+    apiConfig.uploadFileSizeLimitBytes
   );
   const jobExecutionService = new JobExecutionService(
     processRunner,
@@ -151,7 +173,8 @@ export function createProductionRuntime(
     fileRevealer,
     jobScheduler,
     jobLifecycle,
-    storage
+    storage,
+    storagePolicy
   );
   const captionService = new CaptionService(
     videoRepository,
@@ -168,14 +191,16 @@ export function createProductionRuntime(
     apiConfig.whisperCppModel,
     jobScheduler,
     jobLifecycle,
-    mediaPolicy
+    mediaPolicy,
+    storagePolicy
   );
   const packageService = new PackageService(
     videoRepository,
     jobRepository,
     apiConfig.outputDir,
     statePersistence,
-    jobService
+    jobService,
+    storagePolicy
   );
   let shutdownPromise: Promise<void> | undefined;
 
@@ -204,6 +229,7 @@ export function createProductionRuntime(
   };
 
   return {
+    storagePolicy,
     async initialize() {
       videoRepository.clear();
       jobRepository.clear();
@@ -212,6 +238,7 @@ export function createProductionRuntime(
       const recovery = await statePersistence.load();
       await videoService.mergeDuplicateVideos();
       await cleanupService.pruneOrphanFiles();
+      if (dependencies.startHousekeeping !== false) housekeeping.start();
       await statePersistence.save();
       await statePersistence.flush();
       if (
@@ -225,6 +252,12 @@ export function createProductionRuntime(
     },
     async getCapabilities() {
       return capabilitiesService.getCapabilities();
+    },
+    async getStorageStatus() {
+      return storagePolicy.getStatus();
+    },
+    async cleanupStorage() {
+      return storagePolicy.cleanupStaleTemporaryFiles();
     },
     getHistory() {
       return toHistorySnapshotDto(videoRepository.getAll(), jobRepository.getAll());
@@ -253,19 +286,19 @@ export function createProductionRuntime(
     async deleteVideo(id: string) {
       return videoService.delete(id);
     },
-    createOptimizationJob(videoId: string, rawSettings: Partial<OptimizationSettings>) {
+    async createOptimizationJob(videoId: string, rawSettings: Partial<OptimizationSettings>) {
       return jobService.createOptimizationJob(videoId, rawSettings);
     },
-    createSampleJob(videoId: string, rawSettings: Partial<OptimizationSettings>, rawSampleSeconds?: unknown) {
+    async createSampleJob(videoId: string, rawSettings: Partial<OptimizationSettings>, rawSampleSeconds?: unknown) {
       return jobService.createSampleJob(videoId, rawSettings, rawSampleSeconds);
     },
-    createPosterJob(videoId: string, rawAtSeconds?: unknown) {
+    async createPosterJob(videoId: string, rawAtSeconds?: unknown) {
       return jobService.createPosterJob(videoId, rawAtSeconds);
     },
-    createSubtitleJob(videoId: string) {
+    async createSubtitleJob(videoId: string) {
       return captionService.createSubtitleJob(videoId);
     },
-    createPairJobs(videoId: string) {
+    async createPairJobs(videoId: string) {
       return jobService.createPairJobs(videoId);
     },
     async createPackageJob(videoId: string, body: unknown) {
@@ -299,7 +332,7 @@ export function createProductionRuntime(
     async updateCaptions(id: string, vtt: string) {
       return captionService.updateCaptions(id, vtt);
     },
-    createMuxSubtitleJob(videoJobId: string, subtitleJobId: string) {
+    async createMuxSubtitleJob(videoJobId: string, subtitleJobId: string) {
       return captionService.createMuxSubtitleJob(videoJobId, subtitleJobId);
     },
     async revealJob(id: string) {
@@ -310,6 +343,7 @@ export function createProductionRuntime(
     },
     shutdown() {
       shutdownPromise ??= (async () => {
+        await housekeeping.stop();
         jobScheduler.stopAccepting();
         const canceledQueuedIds = jobScheduler.cancelAllQueued();
         await Promise.all(canceledQueuedIds.map((jobId) => cancelJobForShutdown(jobId)));
@@ -339,6 +373,7 @@ export function createProductionRuntime(
 
         await statePersistence.save();
         await statePersistence.flush();
+        storageReservations.close();
       })();
       return shutdownPromise;
     }

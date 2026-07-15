@@ -20,6 +20,10 @@ describe("parseApiConfig", () => {
       uploadFileSizeLimitBytes: 2 * 1024 * 1024 * 1024,
       maxConcurrentMediaJobs: 1,
       shutdownGracePeriodMs: 15000,
+      minFreeStorageBytes: 536870912,
+      maxManagedStorageBytes: 0,
+      tempFileMaxAgeMs: 86400000,
+      housekeepingIntervalMs: 3600000,
       mediaProcessTimeoutMs: 1800000,
       toolCommandTimeoutMs: 60000,
       processKillGracePeriodMs: 5000,
@@ -194,6 +198,38 @@ describe("parseApiConfig", () => {
     for (const value of ["0", "-1", "1.5", "many", ""]) {
       expect(() => parseApiConfig({ UPLOAD_FILE_SIZE_LIMIT_BYTES: value }, options)).toThrow(
         `Invalid UPLOAD_FILE_SIZE_LIMIT_BYTES: ${value}`
+      );
+    }
+  });
+
+  it("accepts and validates storage capacity and housekeeping values", () => {
+    expect(
+      parseApiConfig(
+        {
+          MIN_FREE_STORAGE_BYTES: "1024",
+          MAX_MANAGED_STORAGE_BYTES: "2048",
+          TEMP_FILE_MAX_AGE_MS: "3000",
+          HOUSEKEEPING_INTERVAL_MS: "4000"
+        },
+        options
+      )
+    ).toMatchObject({
+      minFreeStorageBytes: 1024,
+      maxManagedStorageBytes: 2048,
+      tempFileMaxAgeMs: 3000,
+      housekeepingIntervalMs: 4000
+    });
+    expect(parseApiConfig({ MAX_MANAGED_STORAGE_BYTES: "0" }, options).maxManagedStorageBytes).toBe(0);
+
+    for (const variable of ["MIN_FREE_STORAGE_BYTES", "TEMP_FILE_MAX_AGE_MS", "HOUSEKEEPING_INTERVAL_MS"]) {
+      for (const value of ["0", "-1", "1.5", "many", "", String(Number.MAX_SAFE_INTEGER + 2)]) {
+        expect(() => parseApiConfig({ [variable]: value }, options)).toThrow(`Invalid ${variable}: ${value}`);
+      }
+    }
+
+    for (const value of ["-1", "1.5", "many", "", String(Number.MAX_SAFE_INTEGER + 2)]) {
+      expect(() => parseApiConfig({ MAX_MANAGED_STORAGE_BYTES: value }, options)).toThrow(
+        `Invalid MAX_MANAGED_STORAGE_BYTES: ${value}`
       );
     }
   });

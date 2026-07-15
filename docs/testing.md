@@ -325,3 +325,33 @@ Coverage includes:
 The mocked tests intentionally do not decode real media. The `@real-stack` test verifies the browser can drive the
 compiled API, but it remains narrow so CI stays fast and deterministic. Manual smoke testing is still useful for long
 videos, real subtitle generation through whisper.cpp, and real YouTube imports through yt-dlp.
+
+## Phase 8A Storage Capacity Tests
+
+Phase 8A adds fast tests for the new capacity boundary:
+
+- Configuration defaults and validation for the minimum free-space reserve, optional managed quota, stale-temp age, and
+  housekeeping interval.
+- Capacity-provider bigint conversion, safe integer rejection, and disk-full error recognition.
+- Managed-storage inventory across uploads, outputs, temp, and upload-staging, including stale temporary detection and
+  no-follow symlink behavior where the platform permits symlink creation.
+- Storage policy pressure states, quota and free-space rejection, runtime reservation accounting, and manual stale-temp
+  cleanup results.
+- Reservation-manager idempotent release and runtime shutdown clearing.
+- Pure allocation estimates for encode, sample, poster, subtitle, mux, package, URL import, and sparse metadata.
+- Upload middleware dynamic capacity admission, reservation release, configured `413` versus capacity `507`, and staging
+  cleanup on failure.
+- Housekeeping startup run, periodic run, no-overlap behavior, timer cleanup, and shutdown settling.
+
+Frontend tests cover storage-status loading, warning/critical copy, known and unknown capacity values, configured quota,
+temporary-cleanup success and failure, disabled cleanup state after cleanup, job-admission `507` presentation, and
+absence of private path text in the browser.
+
+Playwright route-mocked coverage includes the storage panel, critical state, keyboard-triggered temporary cleanup,
+reclaimed-space feedback, an axe scan, a narrow viewport overflow guard, and the shared console/failed-request gate. The
+real-stack browser smoke checks that storage status appears during an actual upload/encode/delete flow and exercises the
+cleanup control when stale temporary data exists.
+
+The compiled real-media integration suite now calls the storage status and manual cleanup APIs during the basic media
+workflow and uses an intentionally huge configured reserve to prove low-capacity upload rejection returns `507` without
+filling the developer or CI disk.

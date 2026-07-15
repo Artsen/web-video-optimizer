@@ -8,6 +8,9 @@ import type { JobEntity } from "../entities/job-entity.js";
 import type { JobRepository, VideoRepository } from "../repositories/repository-types.js";
 import type { JobService } from "./job-service.js";
 import type { StatePersistenceService } from "./state-persistence-service.js";
+import type { StoragePolicyService } from "../storage/storage-policy-service.js";
+import { estimatePackageAllocation } from "../storage/allocation-estimates.js";
+import { isNoSpaceError, insufficientStorageForOperation } from "../storage/storage-capacity.js";
 import {
   buildZipArchive,
   cleanCaptionText,
@@ -24,7 +27,8 @@ export class PackageService {
     private readonly jobs: JobRepository,
     private readonly outputDir: string,
     private readonly persistence: StatePersistenceService,
-    private readonly jobService: JobService
+    private readonly jobService: JobService,
+    private readonly storagePolicy?: StoragePolicyService
   ) {}
 
   async createPackageJob(
@@ -255,11 +259,23 @@ ${sources}${track ? `\n${track}` : ""}
       { name: "README.txt", data: Buffer.from(readme) }
     ];
 
+    const packageReservation = await this.storagePolicy?.reserve({
+      operation: "package",
+      requiredBytes: estimatePackageAllocation(candidateJobs)
+    });
     const zip = buildZipArchive(entries);
     const packageId = nanoid();
     const outputFileName = `${filenamePrefix}-web-package.zip`;
     const outputPath = path.join(this.outputDir, `${packageId}-${outputFileName}`);
-    await fs.promises.writeFile(outputPath, zip);
+    try {
+      await fs.promises.writeFile(outputPath, zip);
+    } catch (error) {
+      await fs.promises.rm(outputPath, { force: true }).catch(() => undefined);
+      if (isNoSpaceError(error)) throw insufficientStorageForOperation("package");
+      throw error;
+    } finally {
+      packageReservation?.release();
+    }
 
     const job = this.jobService.createEncodeJob(
       video,

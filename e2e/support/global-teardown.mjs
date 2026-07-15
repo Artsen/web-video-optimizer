@@ -34,7 +34,13 @@ function killTree(pid) {
 
 export default async function globalTeardown() {
   try {
-    const raw = await fs.readFile(pidFile, "utf8");
+    let raw;
+    try {
+      raw = await fs.readFile(pidFile, "utf8");
+    } catch (error) {
+      if (error && error.code === "ENOENT") return;
+      throw error;
+    }
     const state = JSON.parse(raw);
     killTree(state.webPid);
     killTree(state.apiPid);

@@ -1,5 +1,6 @@
 import React from "react";
 import type { AppDependencies } from "./app-dependencies";
+import { getReadableApiError } from "../api/api-error";
 import { buildVideoMarkup } from "../domain/job-presenters";
 import { jobDownloadUrl, jobOutputUrl, videoDownloadUrl, videoSourceUrl } from "../api/urls";
 import { useSynchronizedPlayback } from "../features/compare/use-synchronized-playback";
@@ -18,6 +19,7 @@ import type {
   HistorySnapshot,
   JobDto,
   PackageMetadata,
+  StorageStatusDto,
   VideoRecordDto
 } from "@local-video-optimizer/contracts";
 
@@ -68,6 +70,9 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
   const [subtitlePreviewKey, setSubtitlePreviewKey] = React.useState(0);
   const [isSavingSubtitles, setIsSavingSubtitles] = React.useState(false);
   const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
+  const [storageStatus, setStorageStatus] = React.useState<StorageStatusDto | null>(null);
+  const [storageCleanupStatus, setStorageCleanupStatus] = React.useState("");
+  const [isCleaningStorage, setIsCleaningStorage] = React.useState(false);
   const [posterTimestamp, setPosterTimestamp] = React.useState(0);
   const sourcePreviewRef = React.useRef<HTMLVideoElement | null>(null);
   const activeJobsController = useActiveJobs();
@@ -149,15 +154,38 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     currentStatus
   } = workspace;
 
-  useAppBootstrap({ api, theme, setCapabilities, setHistory });
+  useAppBootstrap({ api, theme, setCapabilities, setHistory, setStorageStatus });
 
-  const refreshHistory = React.useCallback(async () => {
+  const refreshStorageStatus = React.useCallback(async () => {
     try {
-      setHistory(await api.getHistory());
+      setStorageStatus(await api.getStorageStatus());
     } catch {
       return;
     }
   }, [api]);
+
+  const refreshHistory = React.useCallback(async () => {
+    try {
+      setHistory(await api.getHistory());
+      void refreshStorageStatus();
+    } catch {
+      return;
+    }
+  }, [api, refreshStorageStatus]);
+
+  async function cleanupStorage() {
+    setIsCleaningStorage(true);
+    setStorageCleanupStatus("");
+    try {
+      const result = await api.cleanupStorage();
+      setStorageStatus(result.storage);
+      setStorageCleanupStatus(`Reclaimed ${result.removedFileCount} temporary file(s).`);
+    } catch (cleanupError) {
+      setError(getReadableApiError(cleanupError));
+    } finally {
+      setIsCleaningStorage(false);
+    }
+  }
 
   const jobSubscriptions = useJobSubscriptions({
     jobEvents,
@@ -341,9 +369,14 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       history,
       selectedVideoIds,
       selectedJobIds,
+      storageStatus,
+      storageCleanupStatus,
+      isCleaningStorage,
       setSelectedVideoIds,
       setSelectedJobIds,
       refreshHistory,
+      refreshStorageStatus,
+      cleanupStorage,
       loadHistoryVideo,
       deleteHistoryItems,
       toggleSelected

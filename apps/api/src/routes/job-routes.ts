@@ -15,49 +15,64 @@ import { streamFile } from "./stream-file.js";
 export function createJobRouter(runtime: ApiRuntime): Router {
   const router = Router();
 
-  router.post("/api/videos/:id/jobs", requireJsonBody, (req, res) => {
-    const { params, body } = parseRequest({ params: IdParamsSchema, body: OptimizationRequestBodySchema }, req);
-    const result = runtime.createOptimizationJob(params.id, body);
-    if (!result.job) {
-      res.status(404).json({ error: "Video not found" });
-      return;
-    }
-    res.status(result.status).json(result.job);
-  });
+  router.post(
+    "/api/videos/:id/jobs",
+    requireJsonBody,
+    asyncHandler(async (req, res) => {
+      const { params, body } = parseRequest({ params: IdParamsSchema, body: OptimizationRequestBodySchema }, req);
+      const result = await runtime.createOptimizationJob(params.id, body);
+      if (!result.job) {
+        res.status(404).json({ error: "Video not found" });
+        return;
+      }
+      res.status(result.status).json(result.job);
+    })
+  );
 
-  router.post("/api/videos/:id/sample", requireJsonBody, (req, res) => {
-    const { params, body } = parseRequest({ params: IdParamsSchema, body: SampleRequestBodySchema }, req);
-    const { sampleSeconds, ...settings } = body;
-    const result = runtime.createSampleJob(params.id, settings, sampleSeconds);
-    if (!result.job) {
-      res.status(404).json({ error: "Video not found" });
-      return;
-    }
-    res.status(result.status).json(result.job);
-  });
+  router.post(
+    "/api/videos/:id/sample",
+    requireJsonBody,
+    asyncHandler(async (req, res) => {
+      const { params, body } = parseRequest({ params: IdParamsSchema, body: SampleRequestBodySchema }, req);
+      const { sampleSeconds, ...settings } = body;
+      const result = await runtime.createSampleJob(params.id, settings, sampleSeconds);
+      if (!result.job) {
+        res.status(404).json({ error: "Video not found" });
+        return;
+      }
+      res.status(result.status).json(result.job);
+    })
+  );
 
-  router.post("/api/videos/:id/poster", requireJsonBody, (req, res) => {
-    const { params, body } = parseRequest({ params: IdParamsSchema, body: PosterRequestBodySchema }, req);
-    const job = runtime.createPosterJob(params.id, body.atSeconds);
-    if (!job) {
-      res.status(404).json({ error: "Video not found" });
-      return;
-    }
-    res.status(202).json(job);
-  });
+  router.post(
+    "/api/videos/:id/poster",
+    requireJsonBody,
+    asyncHandler(async (req, res) => {
+      const { params, body } = parseRequest({ params: IdParamsSchema, body: PosterRequestBodySchema }, req);
+      const job = await runtime.createPosterJob(params.id, body.atSeconds);
+      if (!job) {
+        res.status(404).json({ error: "Video not found" });
+        return;
+      }
+      res.status(202).json(job);
+    })
+  );
 
-  router.post("/api/videos/:id/pair", (req, res) => {
-    const params = parseParams(IdParamsSchema, req);
-    if (req.body && Object.keys(req.body as Record<string, unknown>).length > 0) {
-      parseBody(OptimizationRequestBodySchema, req);
-    }
-    const result = runtime.createPairJobs(params.id);
-    if (!result) {
-      res.status(404).json({ error: "Video not found" });
-      return;
-    }
-    res.status(202).json(result);
-  });
+  router.post(
+    "/api/videos/:id/pair",
+    asyncHandler(async (req, res) => {
+      const params = parseParams(IdParamsSchema, req);
+      if (req.body && Object.keys(req.body as Record<string, unknown>).length > 0) {
+        parseBody(OptimizationRequestBodySchema, req);
+      }
+      const result = await runtime.createPairJobs(params.id);
+      if (!result) {
+        res.status(404).json({ error: "Video not found" });
+        return;
+      }
+      res.status(202).json(result);
+    })
+  );
 
   router.get("/api/jobs/:id", (req, res) => {
     const params = parseParams(IdParamsSchema, req);
