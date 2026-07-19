@@ -42,15 +42,11 @@ export async function streamFile(
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Content-Type", contentTypeFor(descriptor.fileName));
   res.setHeader("Content-Disposition", `${disposition}; filename="${safeName}"`);
-  req.on("close", () => {
-    void close();
-  });
-
   if (!range) {
     res.setHeader("Content-Length", size);
     const stream = opened ? opened.handle.createReadStream() : createReadStream(descriptor.filePath);
     stream.on("error", () => void close());
-    stream.on("end", () => void close());
+    stream.on("close", () => void close());
     stream.pipe(res);
     return;
   }
@@ -71,7 +67,7 @@ export async function streamFile(
     ? opened.handle.createReadStream({ start, end })
     : createReadStream(descriptor.filePath, { start, end });
   stream.on("error", () => void close());
-  stream.on("end", () => void close());
+  stream.on("close", () => void close());
   stream.pipe(res);
 }
 

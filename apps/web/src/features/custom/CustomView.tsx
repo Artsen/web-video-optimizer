@@ -1,7 +1,7 @@
 import { CheckCircle2, Gauge, Package, Play, Settings2, Wand2 } from "lucide-react";
 import type { VideoOptimizerAppController } from "../../app/useVideoOptimizerApp";
 import { formatBytes } from "../../domain/formatters";
-import { codecLabel, nextExportSuggestion, qualityLabel } from "../../domain/job-presenters";
+import { buildSizeComparison, codecLabel, nextExportSuggestion } from "../../domain/job-presenters";
 import { Field } from "../../components/ui/Field";
 import { SectionHeader } from "../../components/ui/SectionHeader";
 import { OptimizationSettingsForm } from "./OptimizationSettingsForm";
@@ -10,21 +10,30 @@ export function CustomView({ controller }: { controller: VideoOptimizerAppContro
   const { custom, source, jobs, status } = controller;
   const video = source.video;
   if (!video) return null;
+  const comparison = buildSizeComparison(video.metadata.fileSize, custom.estimate?.bytes, { estimated: true });
+  const settingsSummary = [
+    custom.settings.outputContainer.toUpperCase(),
+    codecLabel(custom.settings.videoCodec),
+    custom.settings.width ? `${custom.settings.width}px` : "source width",
+    custom.settings.audioMode === "remove"
+      ? "no audio"
+      : `${custom.settings.audioCodec === "aac" ? "AAC" : "Opus"} audio`
+  ].join(" / ");
 
   return (
     <section className="workflow-section custom-view" id="export">
       <SectionHeader
         icon={<Settings2 size={21} />}
-        title="Custom Export"
-        kicker="Manual presets and FFmpeg-style settings for one-off variations."
+        title="Custom"
+        kicker="For one-off exports after the recommended website package is not quite the right fit."
       />
       <div className="export-layout">
         <div className="export-main">
-          <div className="panel preset-panel">
+          <div className="custom-step preset-panel">
             <SectionHeader
               icon={<Wand2 size={20} />}
-              title="Choose Intent"
-              kicker="Start from a sensible export goal, then adjust details below."
+              title="1. Choose goal"
+              kicker="Pick the kind of web export you want."
             />
             <div className="preset-cards">
               {Object.entries(custom.presetInfo).map(([name, info]) => (
@@ -45,10 +54,10 @@ export function CustomView({ controller }: { controller: VideoOptimizerAppContro
             </div>
           </div>
 
-          <div className="panel target-size-panel">
+          <div className="custom-step target-size-panel">
             <SectionHeader
               icon={<Gauge size={20} />}
-              title="Target Size"
+              title="2. Choose target size"
               kicker="Pick a rough web budget and the app will adjust width, frame rate, CRF, and audio."
             />
             <div className="target-size-grid">
@@ -70,12 +79,25 @@ export function CustomView({ controller }: { controller: VideoOptimizerAppContro
         </div>
 
         <aside className="panel summary-panel">
-          <SectionHeader icon={<Gauge size={20} />} title="Custom Estimate" />
+          <SectionHeader icon={<Gauge size={20} />} title="Export summary" />
           <div className="summary-hero">
-            <span>{custom.estimate?.reduction === undefined ? "Estimate" : `${custom.estimate.reduction}%`}</span>
+            <span>Estimated output</span>
             <strong>{formatBytes(custom.estimate?.bytes)}</strong>
-            <em>{qualityLabel(custom.settings)}</em>
+            <em>
+              {comparison.changeLabel} / {comparison.detailLabel}
+            </em>
           </div>
+          <div className={`target-outcome ${comparison.tone}`}>
+            <strong>
+              {comparison.tone === "warn" ? "These settings do not reduce the file" : "Likely smaller website transfer"}
+            </strong>
+            <span>{settingsSummary}</span>
+          </div>
+          {comparison.tone === "warn" && (
+            <p className="compression-warning">
+              Choose a smaller target or a modern preset before exporting for the web.
+            </p>
+          )}
           <div className="fields single">
             <Field
               label="Format"

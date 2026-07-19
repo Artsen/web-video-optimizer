@@ -22,7 +22,7 @@ export function useCaptionWorkflow({
   editingSubtitleJob: Job | null;
   refreshHistory: () => Promise<void>;
   setActiveJobRole: (role: "subtitle", job: Job) => void;
-  setActiveView: React.Dispatch<React.SetStateAction<"prepare" | "outputs" | "custom" | "compare" | "captions">>;
+  setActiveView: (view: "prepare" | "results" | "custom" | "compare" | "captions", outputId?: string) => void;
   setEditingSubtitleJob: React.Dispatch<React.SetStateAction<Job | null>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setIsSavingSubtitles: React.Dispatch<React.SetStateAction<boolean>>;

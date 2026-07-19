@@ -669,9 +669,10 @@ describe("fake process scheduler integration", () => {
       .job!;
     const afterCancel = (await service.createOptimizationJob(source.id, settings({ outputFilename: "after-cancel" })))
       .job!;
+    const runningProcess = runner.latest();
     await expect(service.cancel(canceled.id)).resolves.toMatchObject({ status: "canceled" });
-    expect(runner.latest().killedWith).toBe("SIGTERM");
-    runner.latest().emitError(new Error("late cancellation error"));
+    expect(runningProcess.killedWith).toBe("SIGTERM");
+    runningProcess.emitError(new Error("late cancellation error"));
     await settleProcesses();
     expect(jobs.get(afterCancel.id)?.status).toBe("running");
   });

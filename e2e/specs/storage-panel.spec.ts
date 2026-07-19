@@ -15,9 +15,10 @@ test("shows storage pressure, cleans temporary files, and remains accessible", a
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "Manage Library" }).click();
-  await expect(page.getByRole("heading", { name: "Storage" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Library" }).click();
+  await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
   await expect(page.getByText(/Storage is critically low/)).toBeVisible();
+  await page.getByText("Review storage").click();
   await expect(page.getByText(/Reclaimable temporary data/)).toBeVisible();
 
   await page.keyboard.press("Tab");

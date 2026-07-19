@@ -8,7 +8,7 @@ describe("CurrentJobs", () => {
   it("renders the empty running-job state", () => {
     render(<CurrentJobs jobs={[]} onCancel={vi.fn()} />);
 
-    expect(screen.getByText(/no jobs running/i)).toBeInTheDocument();
+    expect(screen.getByText(/no active work/i)).toBeInTheDocument();
   });
 
   it("renders progress and sends cancel intents", async () => {

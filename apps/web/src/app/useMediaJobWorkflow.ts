@@ -21,9 +21,9 @@ export function useMediaJobWorkflow({
   video,
   clearActiveJobById,
   setActiveJobRole,
-  setActiveView,
   setError,
   setHistory,
+  requestResultsReveal,
   updateActiveJobById
 }: {
   api: AppDependencies["api"];
@@ -39,9 +39,9 @@ export function useMediaJobWorkflow({
   video: VideoRecord | null;
   clearActiveJobById: (jobId: string) => void;
   setActiveJobRole: (role: "primary" | "sample" | "poster" | "package" | "subtitle" | "mux", job: Job | null) => void;
-  setActiveView: React.Dispatch<React.SetStateAction<"prepare" | "outputs" | "custom" | "compare" | "captions">>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setHistory: React.Dispatch<React.SetStateAction<HistorySnapshot>>;
+  requestResultsReveal: (sourceId: string) => void;
   updateActiveJobById: (updated: Job) => void;
 }) {
   async function startJob() {
@@ -50,7 +50,7 @@ export function useMediaJobWorkflow({
     try {
       const nextJob = await api.createOptimizationJob(video.id, settings);
       setActiveJobRole("primary", nextJob);
-      setActiveView("outputs");
+      requestResultsReveal(video.id);
       jobSubscriptions.subscribe(nextJob);
       void refreshHistory();
     } catch (jobError) {
@@ -64,7 +64,7 @@ export function useMediaJobWorkflow({
     try {
       const nextJob = await api.createSampleJob(video.id, settings, 5);
       setActiveJobRole("sample", nextJob);
-      setActiveView("outputs");
+      requestResultsReveal(video.id);
       jobSubscriptions.subscribe(nextJob);
       void refreshHistory();
     } catch (jobError) {
@@ -79,7 +79,7 @@ export function useMediaJobWorkflow({
     try {
       const nextJob = await api.createPosterJob(video.id, atSeconds);
       setActiveJobRole("poster", nextJob);
-      setActiveView("outputs");
+      requestResultsReveal(video.id);
       jobSubscriptions.subscribe(nextJob);
       void refreshHistory();
     } catch (jobError) {
@@ -93,7 +93,7 @@ export function useMediaJobWorkflow({
     try {
       const nextJob = await api.createSubtitleJob(video.id);
       setActiveJobRole("subtitle", nextJob);
-      setActiveView("outputs");
+      requestResultsReveal(video.id);
       jobSubscriptions.subscribe(nextJob);
       void refreshHistory();
     } catch (jobError) {
@@ -108,7 +108,7 @@ export function useMediaJobWorkflow({
       const payload = await api.createPairJobs(video.id, settings);
       const primary = payload.jobs[0];
       if (primary) setActiveJobRole("primary", primary);
-      setActiveView("outputs");
+      requestResultsReveal(video.id);
       payload.jobs.forEach(jobSubscriptions.subscribe);
       void refreshHistory();
     } catch (jobError) {
@@ -183,7 +183,7 @@ export function useMediaJobWorkflow({
     try {
       const nextJob = await api.createMuxJob(target.id, captions.id);
       setActiveJobRole("mux", nextJob);
-      setActiveView("outputs");
+      requestResultsReveal(target.videoId);
       jobSubscriptions.subscribe(nextJob);
       void refreshHistory();
     } catch (muxError) {

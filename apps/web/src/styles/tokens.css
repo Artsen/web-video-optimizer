@@ -1,0 +1,160 @@
+:root {
+  color-scheme: dark;
+
+  --color-app-bg: #181818;
+  --color-workspace-bg: #202020;
+  --color-sidebar-bg: #171717;
+  --color-surface: #242424;
+  --color-surface-elevated: #2a2a2a;
+  --color-surface-recessed: #1b1b1b;
+  --color-surface-hover: #303030;
+  --color-surface-selected: #26332f;
+  --color-border-subtle: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-primary: #10a37f;
+  --color-primary-bg: #0b745d;
+  --color-primary-hover: #08634f;
+  --color-primary-pressed: #064f40;
+  --color-success: #22c59a;
+  --color-info: #8ab4f8;
+  --color-warning: #d6a84f;
+  --color-danger: #ef6b73;
+  --color-text-primary: #f4f4f5;
+  --color-text-secondary: #c7c7c7;
+  --color-text-subtle: #929292;
+  --color-text-disabled: #707070;
+  --color-focus-ring: #10a37f;
+  --color-media-bg: #111111;
+  --color-overlay: rgba(0, 0, 0, 0.72);
+  --color-scrim: rgba(0, 0, 0, 0.62);
+  --layout-sidebar-width: 300px;
+  --layout-sidebar-medium-width: 260px;
+
+  --font-family-base: "Segoe UI Variable Text", "Segoe UI", Inter, system-ui, sans-serif;
+  --font-family-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  --font-product-title: 550 0.95rem/1.2 var(--font-family-base);
+  --font-page-title: 600 clamp(1.45rem, 2vw, 1.75rem) / 1.15 var(--font-family-base);
+  --font-section-title: 550 1.04rem/1.3 var(--font-family-base);
+  --font-card-title: 550 0.94rem/1.3 var(--font-family-base);
+  --font-body: 400 0.94rem/1.55 var(--font-family-base);
+  --font-body-compact: 400 0.85rem/1.45 var(--font-family-base);
+  --font-label: 500 0.76rem/1.25 var(--font-family-base);
+  --font-metadata: 400 0.78rem/1.35 var(--font-family-base);
+  --font-metric: 600 1.2rem/1.15 var(--font-family-base);
+  --font-code: 500 0.86rem/1.55 var(--font-family-mono);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+  --space-9: 48px;
+
+  --radius-control: 8px;
+  --radius-card: 8px;
+  --radius-hero: 12px;
+  --radius-pill: 999px;
+  --radius-dialog: 12px;
+  --radius-media: 8px;
+
+  --shadow-subtle: none;
+  --shadow-elevated: 0 1px 2px rgba(0, 0, 0, 0.16);
+  --shadow-dialog: 0 24px 80px rgba(0, 0, 0, 0.44);
+
+  --motion-fast: 120ms ease;
+  --motion-base: 180ms ease;
+  --motion-slow: 260ms ease;
+
+  --mobile-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --mobile-bottom-nav-height: 54px;
+  --mobile-contextual-bar-height: 0px;
+  --mobile-bottom-chrome-gap: var(--space-2);
+  --mobile-bottom-content-padding: calc(
+    var(--mobile-bottom-nav-height) + var(--mobile-contextual-bar-height) + var(--mobile-safe-area-bottom) +
+      (var(--mobile-bottom-chrome-gap) * 5)
+  );
+
+  --color-control-quiet: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+  --color-control-quiet-hover: color-mix(in srgb, var(--color-text-primary) 13%, transparent);
+  --color-control-disabled: color-mix(in srgb, var(--color-text-disabled) 10%, transparent);
+  --color-border-interactive: color-mix(in srgb, var(--color-text-primary) 18%, transparent);
+  --color-media-controls-bg: color-mix(in srgb, #101010 78%, transparent);
+  --color-media-controls-text: #f4f4f5;
+  --color-media-controls-secondary: rgba(255, 255, 255, 0.72);
+
+  --bg: var(--color-app-bg);
+  --bg-soft: var(--color-sidebar-bg);
+  --panel: var(--color-surface);
+  --panel-strong: var(--color-surface-recessed);
+  --surface-muted: var(--color-surface-recessed);
+  --text: var(--color-text-primary);
+  --muted: var(--color-text-secondary);
+  --subtle: var(--color-text-subtle);
+  --border: var(--color-border-subtle);
+  --border-strong: var(--color-border-strong);
+  --primary: var(--color-primary);
+  --primary-strong: var(--color-primary-bg);
+  --primary-soft: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  --success: var(--color-success);
+  --success-soft: color-mix(in srgb, var(--color-success) 12%, transparent);
+  --warning: var(--color-warning);
+  --warning-soft: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  --danger: var(--color-danger);
+  --danger-soft: color-mix(in srgb, var(--color-danger) 13%, transparent);
+  --info: var(--color-info);
+  --info-soft: color-mix(in srgb, var(--color-info) 12%, transparent);
+  --shadow: var(--shadow-subtle);
+  --radius: var(--radius-card);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-app-bg: #f7f7f7;
+  --color-workspace-bg: #ffffff;
+  --color-sidebar-bg: #f4f4f5;
+  --color-surface: #ffffff;
+  --color-surface-elevated: #ffffff;
+  --color-surface-recessed: #f4f4f5;
+  --color-surface-hover: #eeeeef;
+  --color-surface-selected: #e9f7f3;
+  --color-border-subtle: rgba(0, 0, 0, 0.1);
+  --color-border-strong: rgba(0, 0, 0, 0.16);
+  --color-primary: #0f8068;
+  --color-primary-bg: #0b745d;
+  --color-primary-hover: #08634f;
+  --color-primary-pressed: #064f40;
+  --color-success: #0f8068;
+  --color-info: #2563eb;
+  --color-warning: #9a6700;
+  --color-danger: #b4232a;
+  --color-text-primary: #202123;
+  --color-text-secondary: #4b4b4f;
+  --color-text-subtle: #6f6f76;
+  --color-text-disabled: #9a9aa0;
+  --color-focus-ring: #0f8068;
+  --color-media-bg: #111111;
+  --color-overlay: rgba(0, 0, 0, 0.62);
+  --color-scrim: rgba(0, 0, 0, 0.42);
+  --color-control-quiet: rgba(0, 0, 0, 0.04);
+  --color-control-quiet-hover: rgba(0, 0, 0, 0.075);
+  --color-control-disabled: rgba(0, 0, 0, 0.055);
+  --color-border-interactive: rgba(0, 0, 0, 0.18);
+  --color-media-controls-bg: rgba(17, 17, 17, 0.78);
+  --color-media-controls-text: #ffffff;
+  --color-media-controls-secondary: rgba(255, 255, 255, 0.76);
+  --shadow-subtle: none;
+  --shadow-elevated: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-dialog: 0 24px 80px rgba(0, 0, 0, 0.24);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
+}
