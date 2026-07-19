@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security policy
+    url: https://github.com/Artsen/web-video-optimizer/security/policy
+    about: Please do not report vulnerabilities in public issues.
+  - name: Documentation
+    url: https://github.com/Artsen/web-video-optimizer/tree/main/docs
+    about: Setup, configuration, testing, and troubleshooting docs.

@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Local-first browser UI for inspecting, optimizing, and comparing website videos with FFmpeg.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Artsen/web-video-optimizer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Artsen/web-video-optimizer/issues"
+  },
+  "homepage": "https://github.com/Artsen/web-video-optimizer#readme",
   "workspaces": [
     "packages/*",
     "apps/*"
