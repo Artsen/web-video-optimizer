@@ -25,8 +25,8 @@ export function useSourceWorkflow({
   video,
   videoUrl,
   sourcePreviewRef,
-  setActiveTab,
-  setActiveView,
+  openRouteForSource,
+  openNewRoute,
   setCompareMediaErrors,
   setError,
   setHistory,
@@ -54,9 +54,9 @@ export function useSourceWorkflow({
   video: VideoRecord | null;
   videoUrl: string;
   sourcePreviewRef: React.RefObject<HTMLVideoElement | null>;
-  setActiveTab: React.Dispatch<React.SetStateAction<"workflow" | "history">>;
-  setActiveView: React.Dispatch<React.SetStateAction<"prepare" | "outputs" | "custom" | "compare" | "captions">>;
-  setCompareMediaErrors: React.Dispatch<React.SetStateAction<{ original?: string; optimized?: string }>>;
+  openRouteForSource: (record: VideoRecord, requestedView?: "prepare" | "results" | "custom" | "compare") => void;
+  openNewRoute: () => void;
+  setCompareMediaErrors: React.Dispatch<React.SetStateAction<Record<string, string | undefined>>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setHistory: React.Dispatch<React.SetStateAction<HistorySnapshot>>;
   setImportStatus: React.Dispatch<React.SetStateAction<string>>;
@@ -86,17 +86,20 @@ export function useSourceWorkflow({
     }));
   }
 
-  function loadVideoRecord(record: VideoRecord) {
+  function loadVideoRecord(
+    record: VideoRecord,
+    requestedView: "prepare" | "results" | "custom" | "compare" = "prepare",
+    syncRoute = true
+  ) {
     setVideo(record);
     setCompareMediaErrors({});
     setSourceNameDraft(record.originalName);
-    setActiveTab("workflow");
-    setActiveView("prepare");
     setSettings((current) => ({
       ...current,
       outputFilename: `${record.originalName.replace(/\.[^.]+$/, "")}-optimized`
     }));
     setPackageMetadata(sourcePackageMetadata(record.originalName));
+    if (syncRoute) openRouteForSource(record, requestedView);
   }
 
   async function uploadFile(file: File) {
@@ -110,7 +113,7 @@ export function useSourceWorkflow({
 
     try {
       const record = await api.uploadVideo(file);
-      loadVideoRecord(record);
+      loadVideoRecord(record, "prepare");
       void refreshHistory();
     } catch (uploadError) {
       setError(getReadableApiError(uploadError));
@@ -149,7 +152,7 @@ export function useSourceWorkflow({
     try {
       const record = await api.importVideoUrl(videoUrl.trim());
       setImportStatus("Download complete. Analyzing with FFprobe...");
-      loadVideoRecord(record);
+      loadVideoRecord(record, "prepare");
       setVideoUrl("");
       void refreshHistory();
     } catch (uploadError) {
@@ -175,11 +178,14 @@ export function useSourceWorkflow({
     setError(null);
     setImportStatus("");
     setVideoUrl("");
-    setActiveTab("workflow");
-    setActiveView("prepare");
+    openNewRoute();
   }
 
-  function loadHistoryVideo(historyVideo: HistoryVideo) {
+  function loadHistoryVideo(
+    historyVideo: HistoryVideo,
+    requestedView?: "prepare" | "results" | "custom" | "compare",
+    syncRoute = true
+  ) {
     setVideo(historyVideo);
     setCompareMediaErrors({});
     closeJobSubscriptions();
@@ -191,8 +197,7 @@ export function useSourceWorkflow({
     setSubtitleDraft("");
     if (latestEncode?.settings) setSettings((current) => ({ ...current, ...latestEncode.settings }));
     setPackageMetadata(sourcePackageMetadata(historyVideo.originalName));
-    setActiveTab("workflow");
-    setActiveView("prepare");
+    if (syncRoute) openRouteForSource(historyVideo, requestedView);
   }
 
   function useCurrentPreviewFrame() {

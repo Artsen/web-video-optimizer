@@ -12,16 +12,22 @@ test("loads the empty app, navigates, toggles theme, and passes an empty-state a
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Web Video Optimizer" })).toBeVisible();
   await expect(page.getByText("No uploads yet.")).toBeVisible();
-  await expect(page.getByText("Select Video")).toBeVisible();
+  await expect(page.getByText("Choose Video")).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Results" })).toHaveCount(
+    0
+  );
 
-  await page.getByRole("button", { name: "Manage Library" }).click();
-  await expect(page.getByRole("heading", { name: "History" })).toBeVisible();
-  await page.getByRole("button", { name: "Workflow" }).click();
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Library" }).click();
+  await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
+  await page.getByRole("navigation", { name: "Primary" }).getByRole("button", { name: "Prepare" }).click();
 
   await page.getByRole("button", { name: "Light Mode" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
   await page.setViewportSize({ width: 390, height: 844 });
+  await expect(
+    page.getByRole("navigation", { name: "Primary mobile navigation" }).getByRole("button", { name: "Results" })
+  ).toHaveCount(0);
   const hasHorizontalOverflow = await page.locator("body").evaluate((body) => body.scrollWidth > body.clientWidth + 1);
   expect(hasHorizontalOverflow).toBe(false);
 

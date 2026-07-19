@@ -26,6 +26,19 @@ export const mockVideo = {
   }
 };
 
+export const unprocessedVideo = {
+  ...mockVideo,
+  id: "video-2",
+  originalName: "raw-upload.mp4",
+  jobIds: [],
+  metadata: {
+    ...mockVideo.metadata,
+    fileName: "raw-upload.mp4",
+    fileSize: 18_000_000,
+    durationSeconds: 64
+  }
+};
+
 export const fallbackJob = createJob("fallback-job", "encode", "completed", {
   outputFileName: "homepage-video-fallback-h264.mp4",
   outputSize: 950_000
@@ -34,6 +47,15 @@ export const modernJob = createJob("modern-job", "encode", "completed", {
   outputFileName: "homepage-video-modern-av1.webm",
   outputSize: 640_000,
   settings: { outputContainer: "webm", videoCodec: "libaom-av1", audioCodec: "libopus" }
+});
+export const vp9Job = createJob("vp9-job", "encode", "completed", {
+  outputFileName: "homepage-video-modern-vp9.webm",
+  outputSize: 720_000,
+  settings: { outputContainer: "webm", videoCodec: "libvpx-vp9", audioCodec: "libopus" }
+});
+export const captionedJob = createJob("captioned-job", "mux", "completed", {
+  outputFileName: "homepage-video-captioned.mp4",
+  outputSize: 930_000
 });
 export const posterJob = createJob("poster-job", "poster", "completed", {
   outputFileName: "homepage-video-poster.webp",
@@ -47,11 +69,19 @@ export const subtitleJob = createJob("subtitle-job", "subtitle", "completed", {
 
 export async function installMockApi(
   page: Page,
-  options: { withHistory?: boolean; storage?: Record<string, unknown> } = {}
+  options: {
+    withHistory?: boolean;
+    withUnprocessedSource?: boolean;
+    storage?: Record<string, unknown>;
+    extraComparisonOutputs?: boolean;
+  } = {}
 ) {
   const requests: { method: string; url: string; postData: string | null }[] = [];
   let hasVideo = options.withHistory ?? false;
-  let historyJobs = hasVideo ? [fallbackJob, modernJob, posterJob, subtitleJob] : [];
+  const completedFixtureJobs = options.extraComparisonOutputs
+    ? [fallbackJob, modernJob, vp9Job, captionedJob, posterJob, subtitleJob]
+    : [fallbackJob, modernJob, posterJob, subtitleJob];
+  let historyJobs = hasVideo ? completedFixtureJobs : [];
   let currentStorage = storageStatus(options.storage);
 
   await page.addInitScript(() => {
@@ -106,7 +136,8 @@ export async function installMockApi(
       return;
     }
     if (url.pathname === "/api/history" && request.method() === "GET") {
-      await json(route, hasVideo ? { videos: [mockVideo], jobs: historyJobs } : { videos: [], jobs: [] });
+      const videos = options.withUnprocessedSource ? [mockVideo, unprocessedVideo] : [mockVideo];
+      await json(route, hasVideo ? { videos, jobs: historyJobs } : { videos: [], jobs: [] });
       return;
     }
     if (url.pathname === "/api/videos" && request.method() === "POST") {
@@ -121,14 +152,16 @@ export async function installMockApi(
     }
     if (url.pathname === "/api/videos/video-1/pair") {
       hasVideo = true;
-      historyJobs = [fallbackJob, modernJob, posterJob];
+      historyJobs = options.extraComparisonOutputs ? completedFixtureJobs : [fallbackJob, modernJob, posterJob];
       await json(route, {
-        jobs: [
-          createJob("fallback-job", "encode", "running", { progress: 40 }),
-          createJob("modern-job", "encode", "queued", {
-            settings: { outputContainer: "webm", videoCodec: "libaom-av1", audioCodec: "libopus" }
-          })
-        ]
+        jobs: options.extraComparisonOutputs
+          ? [fallbackJob, modernJob, vp9Job, captionedJob]
+          : [
+              createJob("fallback-job", "encode", "running", { progress: 40 }),
+              createJob("modern-job", "encode", "queued", {
+                settings: { outputContainer: "webm", videoCodec: "libaom-av1", audioCodec: "libopus" }
+              })
+            ]
       });
       return;
     }
@@ -170,6 +203,14 @@ export async function installMockApi(
     }
     if (url.pathname === "/api/history/delete") {
       await json(route, { videos: [], jobs: [] });
+      return;
+    }
+    if (url.pathname === "/api/jobs/poster-job/output") {
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "image/svg+xml" },
+        body: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#111827"/><rect x="80" y="80" width="1120" height="560" rx="28" fill="#1f2937"/><text x="120" y="380" fill="#f9fafb" font-family="Arial, sans-serif" font-size="68">Poster preview</text></svg>`
+      });
       return;
     }
     if (url.pathname.endsWith("/download") || url.pathname.endsWith("/output") || url.pathname.endsWith("/sidecar")) {

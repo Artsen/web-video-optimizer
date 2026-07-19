@@ -26,6 +26,7 @@ describe("PosterLightbox", () => {
     );
 
     expect(screen.getByRole("dialog", { name: "Poster preview" })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("hidden");
     expect(screen.getByRole("link", { name: /download/i })).toHaveAttribute(
       "href",
       "http://localhost:4000/api/jobs/poster-1/download"
@@ -36,5 +37,31 @@ describe("PosterLightbox", () => {
 
     expect(onZoom).toHaveBeenCalledWith(1.25);
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("restores the previous page overflow when unmounted", () => {
+    document.body.style.overflow = "auto";
+
+    const { unmount } = render(
+      <PosterLightbox
+        apiBaseUrl="http://localhost:4000"
+        poster={job({ id: "poster-1", kind: "poster", outputFileName: "poster.webp" })}
+        posterUrl="http://localhost:4000/api/jobs/poster-1/output"
+        zoom={1}
+        pan={{ x: 0, y: 0 }}
+        onClose={vi.fn()}
+        onZoom={vi.fn()}
+        onStartPan={vi.fn()}
+        onMovePan={vi.fn()}
+        onStopPan={vi.fn()}
+      />
+    );
+
+    expect(document.body.style.overflow).toBe("hidden");
+
+    unmount();
+
+    expect(document.body.style.overflow).toBe("auto");
+    document.body.style.overflow = "";
   });
 });

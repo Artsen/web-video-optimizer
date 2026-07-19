@@ -1,4 +1,5 @@
 import { useEffect, useRef, type KeyboardEvent, type PointerEvent } from "react";
+import { createPortal } from "react-dom";
 import type { JobDto } from "@local-video-optimizer/contracts";
 import { Download, X, ZoomIn, ZoomOut } from "lucide-react";
 import { jobDownloadUrl } from "../../api/urls";
@@ -33,14 +34,21 @@ export function PosterLightbox({
 
   useEffect(() => {
     previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
     dialogRef.current?.focus();
-    return () => previousFocusRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      previousFocusRef.current?.focus();
+    };
   }, []);
 
   function trapDialogFocus(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key !== "Tab") return;
     const focusable = Array.from(
-      dialogRef.current?.querySelectorAll<HTMLElement>("a[href], button:not([disabled])") ?? []
+      dialogRef.current?.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      ) ?? []
     );
     if (focusable.length === 0) return;
     const first = focusable[0];
@@ -54,7 +62,7 @@ export function PosterLightbox({
     }
   }
 
-  return (
+  return createPortal(
     <div
       className="lightbox-backdrop"
       role="dialog"
@@ -118,6 +126,8 @@ export function PosterLightbox({
         </div>
         <div
           className={`lightbox-stage ${zoom > 1 ? "zoomed" : ""}`}
+          tabIndex={0}
+          aria-label="Scrollable poster preview image"
           onPointerDown={onStartPan}
           onPointerMove={onMovePan}
           onPointerUp={onStopPan}
@@ -135,6 +145,7 @@ export function PosterLightbox({
           />
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

@@ -45,7 +45,8 @@ describe("UploadPanel", () => {
     const next = controller({ uploadFile });
     const { container } = render(<UploadPanel controller={next} />);
 
-    expect(screen.getByText("Drop a video file")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add a source video" })).toBeInTheDocument();
+    expect(screen.getByText(/local processing/i)).toBeInTheDocument();
     await user.upload(
       container.querySelector('input[type="file"]') as HTMLInputElement,
       new File(["video"], "clip.mp4", { type: "video/mp4" })
@@ -71,8 +72,7 @@ describe("UploadPanel", () => {
 
     await user.click(screen.getByRole("button", { name: /use current frame/i }));
 
-    expect(screen.getByDisplayValue("homepage-video.mp4")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /source/i })).toHaveAttribute("href", "http://localhost/download");
+    expect(screen.getByRole("button", { name: /homepage-video.mp4/i })).toBeInTheDocument();
     expect(useCurrentPreviewFrame).toHaveBeenCalledTimes(1);
   });
 });

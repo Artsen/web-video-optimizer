@@ -13,6 +13,7 @@ data/
 playwright-report/
 test-results/
 .tmp/playwright-*
+.tmp/ui-review/
 *.log
 *.tmp
 ffmpeg-ui-source.zip

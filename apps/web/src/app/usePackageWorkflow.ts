@@ -26,7 +26,7 @@ export function usePackageWorkflow({
   packageMetadataReady: boolean;
   refreshHistory: () => Promise<void>;
   setActiveJobRole: (role: "package", job: Job) => void;
-  setActiveView: React.Dispatch<React.SetStateAction<"prepare" | "outputs" | "custom" | "compare" | "captions">>;
+  setActiveView: (view: "prepare" | "results" | "custom" | "compare" | "captions", outputId?: string) => void;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedPackageJobIds: React.Dispatch<React.SetStateAction<string[]>>;
   video: VideoRecord | null;
@@ -54,7 +54,7 @@ export function usePackageWorkflow({
     try {
       const nextJob = await api.createPackageJob(video.id, Array.from(new Set(packageJobIds)), packageMetadata);
       setActiveJobRole("package", nextJob);
-      setActiveView("outputs");
+      setActiveView("results", nextJob.id);
       void refreshHistory();
     } catch (packageError) {
       setError(getReadableApiError(packageError));

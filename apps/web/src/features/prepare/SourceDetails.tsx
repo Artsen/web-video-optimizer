@@ -1,8 +1,9 @@
-import { Captions, Download, FileVideo, Gauge } from "lucide-react";
+import { Captions, FileVideo, Gauge } from "lucide-react";
 import type { VideoOptimizerAppController } from "../../app/useVideoOptimizerApp";
 import { formatBitrate, formatBytes, formatDuration } from "../../domain/formatters";
 import { Field } from "../../components/ui/Field";
 import { SectionHeader } from "../../components/ui/SectionHeader";
+import { StatusBadge } from "../../components/ui/StatusBadge";
 
 export function SourceDetails({ controller }: { controller: VideoOptimizerAppController }) {
   const { source, status, jobs } = controller;
@@ -11,10 +12,10 @@ export function SourceDetails({ controller }: { controller: VideoOptimizerAppCon
   if (!video) {
     return (
       <div className="panel empty-panel">
-        <SectionHeader icon={<Gauge size={20} />} title="Waiting For A Source" />
+        <SectionHeader icon={<Gauge size={20} />} title="Source details" />
         <p className="muted">
-          After upload, this panel will show codecs, bitrate, dimensions, track counts, compatibility notes, and
-          web-delivery warnings.
+          After upload, this inspector shows the essential web-readiness details first, with deeper codec metadata kept
+          available when you need it.
         </p>
       </div>
     );
@@ -30,15 +31,23 @@ export function SourceDetails({ controller }: { controller: VideoOptimizerAppCon
           : "No embedded subtitles. Configure whisper.cpp to generate captions.";
 
   return (
-    <div className="panel">
-      <SectionHeader icon={<FileVideo size={20} />} title="Source Details" />
+    <div className="panel source-inspector">
+      <SectionHeader
+        icon={<FileVideo size={20} />}
+        title="Source Details"
+        kicker="The useful bits before the codec weeds."
+      />
       <div className="metric-strip">
         <div>
-          <span>Name</span>
-          <strong>{video.originalName}</strong>
+          <span>Resolution</span>
+          <strong className="nowrap-value">
+            {video.metadata.width && video.metadata.height
+              ? `${video.metadata.width}\u00a0x\u00a0${video.metadata.height}`
+              : "Unknown"}
+          </strong>
         </div>
         <div>
-          <span>Source</span>
+          <span>File size</span>
           <strong>{formatBytes(video.metadata.fileSize)}</strong>
         </div>
         <div>
@@ -46,53 +55,61 @@ export function SourceDetails({ controller }: { controller: VideoOptimizerAppCon
           <strong>{formatDuration(video.metadata.durationSeconds)}</strong>
         </div>
         <div>
-          <span>Bitrate</span>
-          <strong>{formatBitrate(video.metadata.overallBitrate)}</strong>
+          <span>Format</span>
+          <strong>{video.metadata.videoCodec ?? video.metadata.container ?? "Unknown"}</strong>
         </div>
       </div>
-      <div className={video.metadata.webFriendly ? "notice good" : "notice warn"}>
-        {video.metadata.webFriendly ? "Looks web-friendly." : "Compatibility review recommended."}
+      <div className="source-status-row">
+        <StatusBadge tone={video.metadata.webFriendly ? "good" : "warn"}>
+          {video.metadata.webFriendly ? "Source can play on the web" : "Compatibility review recommended"}
+        </StatusBadge>
+        <StatusBadge tone="info">{formatBitrate(video.metadata.overallBitrate)} source bitrate</StatusBadge>
       </div>
-      <a className="button secondary wide" href={source.sourceDownloadUrl}>
-        <Download size={18} />
-        Download Original Source
-      </a>
       {video.metadata.warnings.map((warning) => (
         <div className="notice warn" key={warning}>
           {warning}
         </div>
       ))}
-      <div className="subtitle-status">
-        <div>
-          <Captions size={20} />
-          <span>
-            <strong>Subtitles</strong>
-            <em>{subtitleStatus}</em>
-          </span>
-        </div>
-        <button
-          className="button secondary"
-          type="button"
-          onClick={source.startSubtitleJob}
-          disabled={
-            video.metadata.trackCounts.audio === 0 ||
-            jobs.subtitleJob?.status === "running" ||
-            !status.capabilities?.whisperCpp ||
-            !status.capabilities?.whisperModel
-          }
-        >
-          <Captions size={18} />
-          {jobs.subtitleJob?.status === "running" ? "Generating..." : "Generate Subtitles"}
-        </button>
-      </div>
-      {status.capabilities &&
-        (!status.capabilities.whisperCpp || !status.capabilities.whisperModel) &&
-        video.metadata.trackCounts.audio > 0 && (
-          <div className="notice info">
-            Subtitle generation needs whisper.cpp and a model. Set WHISPER_CPP_BIN and WHISPER_CPP_MODEL in the API
-            environment.
+      <details className="details-panel">
+        <summary>Captions</summary>
+        <div className="subtitle-status">
+          <div>
+            <Captions size={20} />
+            <span>
+              <strong>Subtitles</strong>
+              <em>{subtitleStatus}</em>
+            </span>
           </div>
-        )}
+          <button
+            className="button secondary"
+            type="button"
+            onClick={source.startSubtitleJob}
+            disabled={
+              video.metadata.trackCounts.audio === 0 ||
+              jobs.subtitleJob?.status === "running" ||
+              !status.capabilities?.whisperCpp ||
+              !status.capabilities?.whisperModel
+            }
+          >
+            <Captions size={18} />
+            {jobs.subtitleJob?.status === "running" ? "Generating..." : "Generate Subtitles"}
+          </button>
+        </div>
+        {status.capabilities &&
+          (!status.capabilities.whisperCpp || !status.capabilities.whisperModel) &&
+          video.metadata.trackCounts.audio > 0 && (
+            <div className="notice info">
+              Subtitle generation needs whisper.cpp and a model. Set WHISPER_CPP_BIN and WHISPER_CPP_MODEL in the API
+              environment.
+            </div>
+          )}
+      </details>
+      <details className="details-panel">
+        <summary>Source actions</summary>
+        <a className="button secondary wide" href={source.sourceDownloadUrl}>
+          Download Original Source
+        </a>
+      </details>
       <details className="details-panel">
         <summary>Technical metadata</summary>
         <div className="fields">
@@ -103,7 +120,7 @@ export function SourceDetails({ controller }: { controller: VideoOptimizerAppCon
             label="Dimensions"
             value={
               video.metadata.width && video.metadata.height
-                ? `${video.metadata.width} x ${video.metadata.height}`
+                ? `${video.metadata.width}\u00a0x\u00a0${video.metadata.height}`
                 : undefined
             }
           />

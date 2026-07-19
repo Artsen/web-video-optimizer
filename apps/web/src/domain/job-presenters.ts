@@ -1,6 +1,20 @@
 import type { JobDto, OptimizationSettings } from "@local-video-optimizer/contracts";
 import { formatBytes } from "./formatters";
 
+export type SizeComparisonModel = {
+  sizeLabel: string;
+  changeLabel: string;
+  detailLabel: string;
+  tone: "good" | "warn" | "neutral";
+};
+
+export type TargetOutcomeModel = {
+  targetLabel: string;
+  resultLabel: string;
+  statusLabel: string;
+  tone: "good" | "warn" | "neutral";
+};
+
 export function codecLabel(codec: OptimizationSettings["videoCodec"]): string {
   if (codec === "libx264") return "H.264";
   if (codec === "libaom-av1") return "AV1";
@@ -27,6 +41,87 @@ export function fileSizeDelta(outputSize: number | undefined, originalSize: numb
   if (reduction > 0) return `${reduction}% smaller`;
   if (reduction < 0) return `${Math.abs(reduction)}% larger`;
   return "Same size";
+}
+
+export function buildSizeComparison(
+  originalBytes: number | undefined,
+  outputBytes: number | undefined,
+  options: { estimated?: boolean } = {}
+): SizeComparisonModel {
+  if (!originalBytes || !outputBytes) {
+    return {
+      sizeLabel: options.estimated ? "Estimated output" : "Unknown size",
+      changeLabel: "Savings unavailable",
+      detailLabel: "Original or output size is unavailable.",
+      tone: "neutral"
+    };
+  }
+
+  const deltaBytes = originalBytes - outputBytes;
+  const percent = Math.abs(deltaBytes / originalBytes) * 100;
+  const formattedPercent = `${formatPercent(percent)}%`;
+  const prefix = options.estimated ? "Likely " : "";
+
+  if (deltaBytes > 0) {
+    return {
+      sizeLabel: `${options.estimated ? "Estimated " : ""}${formatBytes(outputBytes)}`,
+      changeLabel: `${prefix}${formattedPercent} smaller`,
+      detailLabel: `${formatBytes(deltaBytes)} saved`,
+      tone: "good"
+    };
+  }
+
+  if (deltaBytes < 0) {
+    return {
+      sizeLabel: `${options.estimated ? "Estimated " : ""}${formatBytes(outputBytes)}`,
+      changeLabel: `${prefix}${formattedPercent} larger`,
+      detailLabel: `${formatBytes(Math.abs(deltaBytes))} added`,
+      tone: "warn"
+    };
+  }
+
+  return {
+    sizeLabel: `${options.estimated ? "Estimated " : ""}${formatBytes(outputBytes)}`,
+    changeLabel: "Same size",
+    detailLabel: "No size change",
+    tone: "neutral"
+  };
+}
+
+export function buildTargetOutcome(
+  targetBytes: number | undefined,
+  resultBytes: number | undefined
+): TargetOutcomeModel {
+  if (!targetBytes || !resultBytes) {
+    return {
+      targetLabel: targetBytes ? `Target: under ${formatBytes(targetBytes)}` : "Target: none",
+      resultLabel: resultBytes ? `Result: ${formatBytes(resultBytes)}` : "Result: pending",
+      statusLabel: "Target status unavailable",
+      tone: "neutral"
+    };
+  }
+
+  const delta = targetBytes - resultBytes;
+  if (delta >= 0) {
+    return {
+      targetLabel: `Target: under ${formatBytes(targetBytes)}`,
+      resultLabel: `Result: ${formatBytes(resultBytes)}`,
+      statusLabel: "Target met",
+      tone: "good"
+    };
+  }
+
+  return {
+    targetLabel: `Target: under ${formatBytes(targetBytes)}`,
+    resultLabel: `Result: ${formatBytes(resultBytes)}`,
+    statusLabel: `${formatBytes(Math.abs(delta))} over target`,
+    tone: "warn"
+  };
+}
+
+function formatPercent(percent: number): string {
+  const rounded = Math.round(percent * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
 export function nextExportSuggestion(settings: OptimizationSettings): string {

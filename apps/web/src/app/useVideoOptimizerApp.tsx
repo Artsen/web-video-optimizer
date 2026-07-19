@@ -14,6 +14,9 @@ import { usePackageWorkflow } from "./usePackageWorkflow";
 import { usePosterLightbox } from "./usePosterLightbox";
 import { useSourceWorkflow } from "./useSourceWorkflow";
 import { useWorkspaceModel } from "./useWorkspaceModel";
+import { useBrowserRoute } from "./useBrowserRoute";
+import { initialSettings } from "./app-config";
+import { buildAppRoute, type AppRoute } from "./routes";
 import type {
   Capabilities,
   HistorySnapshot,
@@ -49,9 +52,14 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
   const [error, setError] = React.useState<string | null>(null);
   const [theme, setTheme] = React.useState<"dark" | "light">("dark");
   const [activeTab, setActiveTab] = React.useState<"workflow" | "history">("workflow");
-  const [activeView, setActiveView] = React.useState<"prepare" | "outputs" | "custom" | "compare" | "captions">(
+  const [activeView, setActiveViewState] = React.useState<"prepare" | "results" | "custom" | "compare" | "captions">(
     "prepare"
   );
+  const browserRoute = useBrowserRoute();
+  const [isBootstrapped, setIsBootstrapped] = React.useState(false);
+  const [missingSourceId, setMissingSourceId] = React.useState<string | null>(null);
+  const [selectedOutputId, setSelectedOutputIdState] = React.useState<string | null>(null);
+  const [pendingResultsSourceId, setPendingResultsSourceId] = React.useState<string | null>(null);
   const [history, setHistory] = React.useState<HistorySnapshot>({ videos: [], jobs: [] });
   const [selectedVideoIds, setSelectedVideoIds] = React.useState<string[]>([]);
   const [selectedJobIds, setSelectedJobIds] = React.useState<string[]>([]);
@@ -71,6 +79,7 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
   const [isSavingSubtitles, setIsSavingSubtitles] = React.useState(false);
   const [capabilities, setCapabilities] = React.useState<Capabilities | null>(null);
   const [storageStatus, setStorageStatus] = React.useState<StorageStatusDto | null>(null);
+  const [compareAllRequested, setCompareAllRequested] = React.useState(false);
   const [storageCleanupStatus, setStorageCleanupStatus] = React.useState("");
   const [isCleaningStorage, setIsCleaningStorage] = React.useState(false);
   const [posterTimestamp, setPosterTimestamp] = React.useState(0);
@@ -115,9 +124,20 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     setSyncPlayback,
     compareMediaErrors,
     setCompareMediaErrors,
-    originalCompareRef,
-    optimizedCompareRef,
-    syncVideoState
+    audioSource,
+    selectAudioSource,
+    currentTime: compareCurrentTime,
+    duration: compareDuration,
+    playing: comparePlaying,
+    playbackRate: comparePlaybackRate,
+    loop: compareLoop,
+    registerCompareVideo,
+    syncVideoState,
+    seekAll,
+    playAll,
+    pauseAll,
+    setAllPlaybackRate,
+    setAllLoop
   } = comparePlayback;
 
   const sourceUrl = video ? videoSourceUrl(apiBaseUrl, video.id) : "";
@@ -154,7 +174,160 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     currentStatus
   } = workspace;
 
-  useAppBootstrap({ api, theme, setCapabilities, setHistory, setStorageStatus });
+  React.useEffect(() => {
+    let title = "Web Video Optimizer";
+    if (missingSourceId) title = "Source not found - Web Video Optimizer";
+    else if (activeTab === "history") title = "Library - Web Video Optimizer";
+    else if (video) {
+      const viewLabel =
+        activeView === "results"
+          ? "Results"
+          : activeView === "compare"
+            ? "Compare"
+            : activeView === "custom"
+              ? "Custom Export"
+              : activeView === "captions"
+                ? "Caption Editor"
+                : "Prepare";
+      title = `${viewLabel}: ${video.originalName} - Web Video Optimizer`;
+    }
+    document.title = title;
+  }, [activeTab, activeView, missingSourceId, video]);
+
+  useAppBootstrap({ api, theme, setCapabilities, setHistory, setReady: setIsBootstrapped, setStorageStatus });
+
+  const applyRouteState = React.useCallback((route: AppRoute) => {
+    setMissingSourceId(null);
+    if (route.view === "library") {
+      setActiveTab("history");
+      setActiveViewState("prepare");
+      return;
+    }
+    setActiveTab("workflow");
+    if (route.view === "new") {
+      setActiveViewState("prepare");
+      return;
+    }
+    setActiveViewState(route.view);
+    setSelectedOutputIdState(route.outputId ?? null);
+  }, []);
+
+  const setActiveView = React.useCallback(
+    (nextView: "prepare" | "results" | "custom" | "compare" | "captions", outputId?: string) => {
+      if (nextView === "captions") {
+        setActiveTab("workflow");
+        setActiveViewState("captions");
+        return;
+      }
+      if (!video) {
+        const route: AppRoute = { view: "new" };
+        browserRoute.navigate(route);
+        applyRouteState(route);
+        return;
+      }
+      const route: AppRoute =
+        nextView === "compare"
+          ? {
+              view: "compare",
+              sourceId: video.id,
+              outputId,
+              compareMode: "grid",
+              compareLayout: "auto"
+            }
+          : { view: nextView, sourceId: video.id, outputId };
+      browserRoute.navigate(route);
+      applyRouteState(route);
+    },
+    [applyRouteState, browserRoute, video]
+  );
+
+  const replaceActiveViewRoute = React.useCallback(
+    (nextRoute: AppRoute) => {
+      browserRoute.replace(nextRoute);
+      applyRouteState(nextRoute);
+    },
+    [applyRouteState, browserRoute]
+  );
+
+  const openNewRoute = React.useCallback(() => {
+    const route: AppRoute = { view: "new" };
+    browserRoute.navigate(route);
+    applyRouteState(route);
+  }, [applyRouteState, browserRoute]);
+
+  const openLibraryRoute = React.useCallback(() => {
+    const route: AppRoute = { view: "library" };
+    browserRoute.navigate(route);
+    applyRouteState(route);
+  }, [applyRouteState, browserRoute]);
+
+  const openRouteForSource = React.useCallback(
+    (record: VideoRecord, requestedView?: "prepare" | "results" | "custom" | "compare") => {
+      const hasOutputs = history.jobs.some(
+        (historyJob) =>
+          historyJob.videoId === record.id &&
+          historyJob.status === "completed" &&
+          ["encode", "mux", "poster", "subtitle", "package"].includes(historyJob.kind)
+      );
+      const view = requestedView ?? (hasOutputs ? "results" : "prepare");
+      const route: AppRoute =
+        view === "compare"
+          ? { view, sourceId: record.id, compareMode: "grid", compareLayout: "auto" }
+          : { view, sourceId: record.id };
+      browserRoute.navigate(route);
+      applyRouteState(route);
+    },
+    [applyRouteState, browserRoute, history.jobs]
+  );
+
+  const setSelectedOutputId = React.useCallback(
+    (jobId: string | null) => {
+      setSelectedOutputIdState(jobId);
+      if (video && activeTab === "workflow" && activeView === "results") {
+        replaceActiveViewRoute({ view: "results", sourceId: video.id, outputId: jobId ?? undefined });
+      }
+    },
+    [activeTab, activeView, replaceActiveViewRoute, video]
+  );
+
+  React.useEffect(() => {
+    if (video && activeView === "results" && finishedOutputJobs.length === 0 && isBootstrapped) {
+      queueMicrotask(() => replaceActiveViewRoute({ view: "prepare", sourceId: video.id }));
+      return;
+    }
+    if (!video || activeView !== "results") return;
+    if (finishedOutputJobs.length === 0) {
+      if (selectedOutputId) queueMicrotask(() => setSelectedOutputIdState(null));
+      return;
+    }
+    const selectedExists = selectedOutputId
+      ? finishedOutputJobs.some((output) => output.id === selectedOutputId)
+      : false;
+    if (!selectedExists) {
+      const nextOutputId = finishedOutputJobs[0]?.id ?? null;
+      queueMicrotask(() => {
+        setSelectedOutputIdState(nextOutputId);
+        replaceActiveViewRoute({ view: "results", sourceId: video.id, outputId: nextOutputId ?? undefined });
+      });
+    }
+  }, [
+    activeView,
+    currentVideoJobs.length,
+    finishedOutputJobs,
+    isBootstrapped,
+    replaceActiveViewRoute,
+    selectedOutputId,
+    video
+  ]);
+
+  React.useEffect(() => {
+    if (!video || pendingResultsSourceId !== video.id || completedOutputJobs.length === 0) return;
+    const firstOutputId = completedOutputJobs[0]?.id;
+    queueMicrotask(() => {
+      setPendingResultsSourceId(null);
+      setActiveView("results", firstOutputId);
+    });
+  }, [completedOutputJobs, pendingResultsSourceId, setActiveView, video]);
 
   const refreshStorageStatus = React.useCallback(async () => {
     try {
@@ -200,6 +373,7 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       void refreshHistory();
     }
   });
+  const closeJobSubscriptions = jobSubscriptions.closeAll;
 
   function mergeHistoryJob(updated: Job) {
     setHistory((current) => {
@@ -216,12 +390,12 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     useSourceWorkflow({
       api,
       history,
+      openNewRoute,
+      openRouteForSource,
       sourceNameDraft,
       video,
       videoUrl,
       sourcePreviewRef,
-      setActiveTab,
-      setActiveView,
       setCompareMediaErrors,
       setError,
       setHistory,
@@ -237,12 +411,108 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       setVideoUrl,
       renamingSource,
       setRenamingSource,
-      closeJobSubscriptions: jobSubscriptions.closeAll,
+      closeJobSubscriptions,
       closePosterLightbox,
       refreshHistory,
       resetActiveJobs,
       restoreActiveJobsFromHistory
     });
+  const loadHistoryVideoRef = React.useRef(loadHistoryVideo);
+  React.useEffect(() => {
+    loadHistoryVideoRef.current = loadHistoryVideo;
+  }, [loadHistoryVideo]);
+
+  React.useEffect(() => {
+    const route = browserRoute.route;
+    if (!isBootstrapped) return;
+    let canceled = false;
+    const syncRouteState = (callback: () => void) => {
+      queueMicrotask(() => {
+        if (!canceled) callback();
+      });
+    };
+
+    if (route.view === "library") {
+      syncRouteState(() => applyRouteState(route));
+      return () => {
+        canceled = true;
+      };
+    }
+
+    if (route.view === "new") {
+      syncRouteState(() => {
+        if (video) {
+          setVideo(null);
+          setCompareMediaErrors({});
+          closeJobSubscriptions();
+          resetActiveJobs();
+          closePosterLightbox();
+          setSubtitleDraft("");
+          setSourceNameDraft("");
+          setPosterTimestamp(0);
+          setSelectedPackageJobIds([]);
+          setPackageMetadata({ title: "", description: "", language: "en", filenamePrefix: "" });
+          setSettings(initialSettings);
+          setError(null);
+          setImportStatus("");
+          setVideoUrl("");
+        }
+        applyRouteState(route);
+      });
+      return () => {
+        canceled = true;
+      };
+    }
+
+    const requestedView = route.view;
+    const requestedOutputId = route.outputId;
+    if (video?.id === route.sourceId) {
+      syncRouteState(() => {
+        setMissingSourceId(null);
+        applyRouteState(route);
+      });
+      return () => {
+        canceled = true;
+      };
+    }
+
+    const historyVideo = history.videos.find((candidate) => candidate.id === route.sourceId);
+    if (historyVideo) {
+      syncRouteState(() => {
+        loadHistoryVideoRef.current(historyVideo, requestedView, false);
+        setMissingSourceId(null);
+        applyRouteState(route);
+        setSelectedOutputIdState(requestedOutputId ?? null);
+      });
+      return () => {
+        canceled = true;
+      };
+    }
+
+    syncRouteState(() => {
+      setVideo(null);
+      resetActiveJobs();
+      closePosterLightbox();
+      setMissingSourceId(route.sourceId);
+      setActiveTab("workflow");
+      setActiveViewState("prepare");
+      window.history.replaceState(null, "", buildAppRoute({ view: "library" }));
+    });
+    return () => {
+      canceled = true;
+    };
+  }, [
+    applyRouteState,
+    browserRoute.route,
+    closePosterLightbox,
+    closeJobSubscriptions,
+    history.videos,
+    isBootstrapped,
+    resetActiveJobs,
+    setCompareMediaErrors,
+    setSettings,
+    video
+  ]);
   const mediaJobs = useMediaJobWorkflow({
     api,
     currentVideoJobs,
@@ -257,9 +527,9 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     video,
     clearActiveJobById,
     setActiveJobRole,
-    setActiveView,
     setError,
     setHistory,
+    requestResultsReveal: setPendingResultsSourceId,
     updateActiveJobById
   });
   const {
@@ -347,10 +617,17 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
 
   function selectVariation(nextJob: Job) {
     setCompareMediaErrors({});
+    setCompareAllRequested(false);
     selectActiveJobVariation(nextJob);
     if ((nextJob.kind === "encode" || nextJob.kind === "mux") && nextJob.status === "completed") {
-      setActiveView("compare");
+      setActiveView("compare", nextJob.id);
     }
+  }
+
+  function compareAllVersions() {
+    setCompareMediaErrors({});
+    setCompareAllRequested(true);
+    setActiveView("compare");
   }
 
   return {
@@ -358,6 +635,13 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     navigation: {
       activeTab,
       activeView,
+      route: browserRoute.route,
+      isBootstrapped,
+      missingSourceId,
+      openLibraryRoute,
+      openNewRoute,
+      openRouteForSource,
+      replaceActiveViewRoute,
       setActiveTab,
       setActiveView,
       startNewVideo,
@@ -412,6 +696,8 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       finishedOutputJobs,
       completedOutputJobs,
       completedEncodeJobs,
+      selectedOutputId,
+      setSelectedOutputId,
       bestSavingsJob,
       jobNameDrafts,
       setJobNameDrafts,
@@ -425,6 +711,7 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       cancelJob,
       renameJobOutput,
       selectVariation,
+      compareAllVersions,
       revealJobOutput,
       deleteHistoryItems,
       muxSubtitlesIntoVideo,
@@ -491,13 +778,25 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       downloadUrl,
       videoMarkup,
       completedReduction,
+      compareAllRequested,
       syncPlayback,
       setSyncPlayback,
       compareMediaErrors,
       setCompareMediaErrors,
-      originalCompareRef,
-      optimizedCompareRef,
-      syncVideoState
+      audioSource,
+      selectAudioSource,
+      compareCurrentTime,
+      compareDuration,
+      comparePlaying,
+      comparePlaybackRate,
+      compareLoop,
+      registerCompareVideo,
+      syncVideoState,
+      seekAll,
+      playAll,
+      pauseAll,
+      setAllPlaybackRate,
+      setAllLoop
     }
   };
 }

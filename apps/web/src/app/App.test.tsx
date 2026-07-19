@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AppDependencies } from "./app-dependencies";
 import type { VideoOptimizerApi } from "../api/api-client";
@@ -77,12 +77,31 @@ function renderApp(api = createApi()) {
   return { api, closeCalls, jobEvents, handlers, ...view };
 }
 
+async function findNamedButtonWithClass(name: RegExp, className: string): Promise<HTMLButtonElement> {
+  let match: HTMLButtonElement | undefined;
+  await waitFor(() => {
+    match = screen
+      .getAllByRole("button", { name })
+      .find((button): button is HTMLButtonElement => button.classList.contains(className));
+    expect(match).toBeDefined();
+  });
+  return match as HTMLButtonElement;
+}
+
 describe("App behavior", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
   it("loads capabilities and history and shows the empty source state", async () => {
     const api = createApi();
     renderApp(api);
 
-    expect(await screen.findByText("Waiting For A Source")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Ready for a source video" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Web Video Optimizer" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Ready for a source video" })).toBeInTheDocument();
+    expect(screen.getByText(/fast, compatible website video package/i)).toBeInTheDocument();
+    expect(screen.getByText(/local processing/i)).toBeInTheDocument();
     expect(api.getCapabilities).toHaveBeenCalledTimes(1);
     expect(api.getHistory).toHaveBeenCalledTimes(1);
     expect(api.getStorageStatus).toHaveBeenCalledTimes(1);
@@ -99,10 +118,16 @@ describe("App behavior", () => {
 
     await user.upload(input as HTMLInputElement, new File(["video"], "local.mp4", { type: "video/mp4" }));
 
-    await screen.findByDisplayValue("homepage-video.mp4");
+    await findNamedButtonWithClass(/homepage-video.mp4/i, "source-title-button");
     expect(api.uploadVideo).toHaveBeenCalledWith(expect.objectContaining({ name: "local.mp4" }));
     expect(screen.getByText("Source Details")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Prepare" })).toBeInTheDocument();
+    expect(screen.getByText("Optimize for website")).toBeInTheDocument();
+    expect(screen.getByText(/87-94% smaller/)).toBeInTheDocument();
     expect(screen.getAllByText("9.5 MB").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /^results$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /jump to results/i })).not.toBeInTheDocument();
+    expect(window.location.search).toContain("view=prepare");
   });
 
   it("sends current settings to Optimize For Website and subscribes to returned jobs", async () => {
@@ -113,8 +138,9 @@ describe("App behavior", () => {
     await waitFor(() => expect(api.getHistory).toHaveBeenCalled());
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["video"], "local.mp4", { type: "video/mp4" }));
-    await screen.findByDisplayValue("homepage-video.mp4");
+    await findNamedButtonWithClass(/homepage-video.mp4/i, "source-title-button");
     await user.click(screen.getByRole("button", { name: /optimize for website/i }));
+    expect(window.location.search).toContain("view=prepare");
 
     expect(api.createPairJobs).toHaveBeenCalledWith("video-1", expect.objectContaining({ outputContainer: "mp4" }));
     expect(vi.mocked(jobEvents.subscribe).mock.calls.map(([jobId]) => jobId)).toEqual(
@@ -123,8 +149,10 @@ describe("App behavior", () => {
 
     handlers.get("fallback-job")?.onUpdate(job({ id: "fallback-job", status: "completed", progress: 100 }));
 
+    await waitFor(() => expect(window.location.search).toContain("view=results"));
     await waitFor(() => expect(screen.getAllByText("MP4 fallback").length).toBeGreaterThan(0));
-    expect(screen.getAllByText("Jobs & Outputs").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Results").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: /^view results$/i })).not.toBeInTheDocument();
   });
 
   it("closes active job subscriptions when the app unmounts", async () => {
@@ -135,7 +163,7 @@ describe("App behavior", () => {
     await waitFor(() => expect(api.getHistory).toHaveBeenCalled());
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["video"], "local.mp4", { type: "video/mp4" }));
-    await screen.findByDisplayValue("homepage-video.mp4");
+    await findNamedButtonWithClass(/homepage-video.mp4/i, "source-title-button");
     await user.click(screen.getByRole("button", { name: /optimize for website/i }));
 
     unmount();
@@ -151,12 +179,12 @@ describe("App behavior", () => {
     await waitFor(() => expect(api.getHistory).toHaveBeenCalled());
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;
     await user.upload(input, new File(["video"], "local.mp4", { type: "video/mp4" }));
-    await screen.findByDisplayValue("homepage-video.mp4");
+    await findNamedButtonWithClass(/homepage-video.mp4/i, "source-title-button");
     await user.click(screen.getByRole("button", { name: /optimize for website/i }));
     await user.click(screen.getByRole("button", { name: /new video/i }));
 
     expect(closeCalls).toEqual(expect.arrayContaining(["fallback-job", "modern-job"]));
-    expect(screen.getByText("Waiting For A Source")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Ready for a source video" })).toBeInTheDocument();
   });
 
   it("shows safe API failure messages during upload", async () => {
@@ -183,8 +211,9 @@ describe("App behavior", () => {
       container.querySelector('input[type="file"]') as HTMLInputElement,
       new File(["video"], "local.mp4", { type: "video/mp4" })
     );
-    await screen.findByDisplayValue("homepage-video.mp4");
-    await user.click(screen.getByRole("button", { name: /^custom$/i }));
+    await findNamedButtonWithClass(/homepage-video.mp4/i, "source-title-button");
+    await user.click(screen.getByRole("button", { name: /custom export/i }));
+    await user.click(screen.getByText("Advanced settings"));
 
     fireEvent.change(container.querySelector('input[type="range"]') as HTMLInputElement, { target: { value: "40" } });
     await user.click(screen.getByRole("button", { name: /export current settings/i }));
@@ -201,11 +230,12 @@ describe("App behavior", () => {
     });
     renderApp(api);
 
-    await user.click(await screen.findByRole("button", { name: /archive.mp4/i }));
-    expect(screen.getByDisplayValue("archive.mp4")).toBeInTheDocument();
+    await user.click(await findNamedButtonWithClass(/archive.mp4/i, "sidebar-file"));
+    expect(await findNamedButtonWithClass(/archive.mp4/i, "source-title-button")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: /manage library/i }));
-    await user.click(screen.getByRole("button", { name: "Delete file" }));
+    await user.click(screen.getAllByRole("button", { name: /^library$/i })[0]);
+    await user.click(screen.getByRole("button", { name: "Source row actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete source" }));
 
     expect(api.deleteHistory).toHaveBeenCalledWith(["history-video"], []);
   });
@@ -230,11 +260,10 @@ describe("App behavior", () => {
     });
     renderApp(api);
 
-    await user.click(await screen.findByRole("button", { name: /manage library/i }));
+    await user.click((await screen.findAllByRole("button", { name: /^library$/i }))[0]);
 
-    expect(
-      screen.getByText("Storage is getting low. Existing history is preserved until you delete it.")
-    ).toBeInTheDocument();
+    expect(screen.getByText("Storage is low")).toBeInTheDocument();
+    await user.click(screen.getByText("Review storage"));
     expect(screen.getByText("Unknown")).toBeInTheDocument();
     expect(screen.getByText("488.3 KB")).toBeInTheDocument();
     expect(screen.getByText("19.1 MB")).toBeInTheDocument();
@@ -260,10 +289,125 @@ describe("App behavior", () => {
     });
     renderApp(api);
 
-    await user.click(await screen.findByRole("button", { name: /manage library/i }));
+    await user.click((await screen.findAllByRole("button", { name: /^library$/i }))[0]);
     expect(screen.getByText(/Storage is critically low/)).toBeInTheDocument();
+    await user.click(screen.getByText("Review storage"));
     await user.click(screen.getByRole("button", { name: /clean temporary files only/i }));
     expect(await screen.findByText("Not enough free storage space to clean temporary files.")).toBeInTheDocument();
+  });
+
+  it("restores history sources with outputs directly to inline results", async () => {
+    const user = userEvent.setup();
+    const restored = { ...videoRecord({ id: "video-1" }), jobIds: ["job-1"] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(historySnapshot({ videos: [restored], jobs: [job({ id: "job-1" })] }))
+    });
+    renderApp(api);
+
+    await user.click(await screen.findByRole("button", { name: /homepage-video.mp4/i }));
+
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(window.location.search).toContain("view=results");
+    expect(window.location.search).toContain("source=video-1");
+  });
+
+  it("restores history sources without completed outputs to prepare", async () => {
+    const user = userEvent.setup();
+    const restored = { ...videoRecord({ id: "video-1" }), jobIds: ["failed-job"] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(
+        historySnapshot({
+          videos: [restored],
+          jobs: [job({ id: "failed-job", status: "failed", outputSize: 0 })]
+        })
+      )
+    });
+    renderApp(api);
+
+    await user.click(await screen.findByRole("button", { name: /homepage-video.mp4/i }));
+
+    expect(await screen.findByRole("heading", { name: "Prepare" })).toBeInTheDocument();
+    expect(window.location.search).toContain("view=prepare");
+  });
+
+  it("lets an explicit prepare URL override the processed-source results default", async () => {
+    window.history.replaceState(null, "", "/?view=prepare&source=video-1");
+    const restored = { ...videoRecord({ id: "video-1" }), jobIds: ["job-1"] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(historySnapshot({ videos: [restored], jobs: [job({ id: "job-1" })] }))
+    });
+    renderApp(api);
+
+    expect(await screen.findByRole("heading", { name: "Prepare" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(window.location.search).toContain("view=prepare");
+  });
+
+  it("shows compact preparation controls in the results state", async () => {
+    window.history.replaceState(null, "", "/?view=results&source=video-1&output=job-1");
+    const restored = { ...videoRecord({ id: "video-1" }), jobIds: ["job-1"] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(historySnapshot({ videos: [restored], jobs: [job({ id: "job-1" })] }))
+    });
+    renderApp(api);
+
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(screen.getByText("Smallest output")).toBeInTheDocument();
+    expect(screen.getByLabelText("Smallest output size comparison")).toBeInTheDocument();
+    const disclosure = screen.getByText("Edit source / preparation options");
+    expect(disclosure.closest("details")).not.toHaveAttribute("open");
+    await userEvent.click(disclosure);
+    expect(disclosure.closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("heading", { name: "Optimize for website" })).toBeInTheDocument();
+  });
+
+  it("recovers gracefully when a routed source is missing", async () => {
+    window.history.replaceState(null, "", "/?view=results&source=missing-video&output=job-1");
+    renderApp(createApi());
+
+    expect(await screen.findByRole("heading", { name: "Source is no longer available" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add New Video" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Library" })).toBeInTheDocument();
+    expect(window.location.search).toBe("?view=library");
+  });
+
+  it("restores selected output from the URL", async () => {
+    window.history.replaceState(null, "", "/?view=results&source=video-1&output=modern-job");
+    const restored = { ...videoRecord({ id: "video-1" }), jobIds: ["fallback-job", "modern-job"] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(
+        historySnapshot({
+          videos: [restored],
+          jobs: [
+            job({ id: "fallback-job", outputFileName: "homepage-video-fallback-h264.mp4" }),
+            job({ id: "modern-job", outputFileName: "homepage-video-modern-av1.webm", outputSize: 700_000 })
+          ]
+        })
+      )
+    });
+    renderApp(api);
+
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("complementary", { name: "Selected output" })).getByText("homepage-video-modern-av1.webm")
+    ).toBeInTheDocument();
+  });
+
+  it("recovers invalid selected outputs to the first valid output", async () => {
+    window.history.replaceState(null, "", "/?view=results&source=video-1&output=missing-job");
+    const restored = { ...videoRecord({ id: "video-1" }), jobIds: ["fallback-job"] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(
+        historySnapshot({
+          videos: [restored],
+          jobs: [job({ id: "fallback-job", outputFileName: "homepage-video-fallback-h264.mp4" })]
+        })
+      )
+    });
+    renderApp(api);
+
+    expect(await screen.findByRole("heading", { name: "Results" })).toBeInTheDocument();
+    await waitFor(() => expect(window.location.search).toContain("output=fallback-job"));
   });
 
   it("loads and saves caption edits", async () => {
@@ -282,7 +426,6 @@ describe("App behavior", () => {
     renderApp(api);
 
     await user.click(await screen.findByRole("button", { name: /homepage-video.mp4/i }));
-    await user.click(screen.getAllByRole("button", { name: /jobs & outputs/i })[0]);
     await user.click(screen.getByRole("button", { name: /^edit$/i }));
 
     const editor = await screen.findByLabelText(/webvtt captions/i);

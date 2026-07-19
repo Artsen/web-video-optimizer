@@ -145,6 +145,10 @@ describe("real media compiled API integration", () => {
         body: JSON.stringify({ originalName: "renamed-source.mp4" })
       });
       expect(renamed.originalName).toBe("renamed-source.mp4");
+      const sourceDownload = await downloadBuffer(`${harness.baseUrl}/api/videos/${video.id}/download`);
+      expect(sourceDownload.response.status).toBe(200);
+      expect(sourceDownload.response.headers.get("content-disposition")).toContain("renamed-source.mp4");
+      expect(sourceDownload.buffer.length).toBeGreaterThan(0);
 
       const job = await jsonRequest<JobDto>(`${harness.baseUrl}/api/videos/${video.id}/jobs`, {
         method: "POST",
@@ -302,7 +306,7 @@ describe("real media compiled API integration", () => {
   it("fails timed-out media work, removes partial output, and accepts later work", async () => {
     await withApi(
       "timeout",
-      { MEDIA_PROCESS_TIMEOUT_MS: "500", PROCESS_KILL_GRACE_PERIOD_MS: "10" },
+      { MEDIA_PROCESS_TIMEOUT_MS: "2000", PROCESS_KILL_GRACE_PERIOD_MS: "10" },
       async (harness, root) => {
         const sourcePath = path.join(root, "source.mp4");
         await generateAvFixture(sourcePath, 6);
@@ -322,12 +326,15 @@ describe("real media compiled API integration", () => {
         });
         await waitForJobStatus(harness, job.id, "running");
         const failed = await waitForTerminalJob(harness, job.id);
-        expect(failed).toMatchObject({ status: "failed", message: "Media processing timed out after 500 ms" });
+        expect(failed).toMatchObject({ status: "failed", message: "Media processing timed out after 2000 ms" });
         await expect(fetch(`${harness.baseUrl}/api/jobs/${job.id}/download`)).resolves.toMatchObject({ status: 404 });
         const history = await jsonRequest<HistorySnapshot>(`${harness.baseUrl}/api/history`);
         expect(history.jobs.find((item) => item.id === job.id)?.status).toBe("failed");
 
-        const later = await jsonRequest<JobDto>(`${harness.baseUrl}/api/videos/${video.id}/jobs`, {
+        const laterSourcePath = path.join(root, "later-source.mp4");
+        await generateAvFixture(laterSourcePath, 1);
+        const laterVideo = await uploadVideo(harness, laterSourcePath, "later-source.mp4");
+        const later = await jsonRequest<JobDto>(`${harness.baseUrl}/api/videos/${laterVideo.id}/jobs`, {
           method: "POST",
           body: JSON.stringify({
             outputContainer: "mp4",

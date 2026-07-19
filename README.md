@@ -7,7 +7,7 @@ Videos stay on your machine. The app runs a local React UI and local API, stores
 ## MVP Features
 
 - Drag-and-drop video upload
-- ChatGPT-style workspace with a left Library sidebar and focused Prepare, Jobs & Outputs, and Custom views
+- Polished desktop-style workspace with a compact Library rail, a combined Prepare/Results source workspace, and focused Custom, Captions, and Compare views
 - One-click `Optimize For Website` path for MP4/H.264 fallback, WebM/AV1 modern source, and WebP poster generation
 - Source preview immediately after upload
 - FFprobe-based technical inspection
@@ -29,7 +29,7 @@ Videos stay on your machine. The app runs a local React UI and local API, stores
 - One-click modern + fallback export jobs
 - Downloadable web package with exported videos, poster, `embed.html`, and `README.txt`
 - Source-attached variation list with file sizes, savings, badges, and package selection
-- Jobs & Outputs center with running job progress, output cards, package readiness, and ZIP creation
+- Inline Results section attached to the active source, with compact source summary, output cards, package readiness, and ZIP creation
 - Target size shortcuts for roughly 2 MB, 5 MB, and 10 MB web budgets
 - Local output reveal buttons for opening generated files in the system file manager
 - Failed and canceled job cards with command-copy support for troubleshooting
@@ -238,6 +238,15 @@ npm run test:e2e
 This builds the app, starts isolated local API/web servers, runs Playwright Chromium tests, checks representative axe
 accessibility scans, and includes one small real-stack upload/encode/download smoke test.
 
+Run deterministic UI screenshot review locally:
+
+```bash
+npm run review:ui-screens
+```
+
+This builds the app, runs a mocked Playwright visual pass, and writes screenshots to `.tmp/ui-review/` for manual
+inspection. The screenshots are not a CI gate and are intentionally ignored by Git.
+
 ## Repository Structure
 
 ```text
@@ -316,7 +325,7 @@ $env:WHISPER_CPP_MODEL="C:\path\to\ggml-base.en.bin"
 npm.cmd run dev:api
 ```
 
-If a video already has embedded subtitle tracks, the app reports them from FFprobe. If no subtitles exist and an audio track is present, the app can generate `.vtt` and `.srt` caption files locally. Completed captions can be edited in the Jobs & Outputs view, downloaded as sidecar files, included in the website ZIP, or remuxed into completed MP4/WebM outputs as embedded subtitle tracks.
+If a video already has embedded subtitle tracks, the app reports them from FFprobe. If no subtitles exist and an audio track is present, the app can generate `.vtt` and `.srt` caption files locally. Completed captions can be edited in the Results view, downloaded as sidecar files, included in the website ZIP, or remuxed into completed MP4/WebM outputs as embedded subtitle tracks.
 
 ## Preset Strategy
 
@@ -356,4 +365,4 @@ browser smoke is still required for real media playback and visual equivalence.
 
 ### Frontend Architecture
 
-The browser app uses a small React bootstrap, injected API/event dependencies, feature-level workflow components, and centralized API/error/event boundaries. Frontend tests cover API contracts, event subscriptions, selectors, feature components, and root workflow behavior.
+The browser app uses a small React bootstrap, injected API/event dependencies, feature-level workflow components, centralized API/error/event boundaries, and a CSS design system split across semantic tokens, reset, foundations, layout, component, feature, and responsive layers. Frontend tests cover API contracts, event subscriptions, selectors, feature components, root workflow behavior, browser accessibility, and representative screenshot review states.

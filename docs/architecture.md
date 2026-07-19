@@ -362,6 +362,28 @@ Major visual workflows are separated into feature components:
 
 Pure derivations remain in selector/presenter modules rather than being rebuilt inside views. Phase 7B should add browser E2E coverage and can continue reducing the controller by moving more feature-local workflows into feature hooks.
 
+## Browser Route Model
+
+The web app uses a tiny query-string route layer in `apps/web/src/app/routes.ts` and `useBrowserRoute.ts`; it does not
+add a router dependency. Routes use stable application IDs only, for example `?view=prepare&source=video-1`,
+`?view=results&source=video-1&output=job-1`, and
+`?view=compare&source=video-1&output=job-1&mode=wipe&layout=two`. Filenames, absolute paths, content hashes, and local
+storage locations must not be serialized into URLs.
+
+The top-level destinations are `new`, `library`, `prepare`, `results`, `custom`, and `compare`. `prepare` and `results`
+are two URL-addressable states of one source workspace, not separate global product areas. Prepare renders the full
+source player, poster controls, source details, recommendations, and any available inline Results section. Results
+renders a compact source summary plus a collapsed “Edit source / preparation options” disclosure before the completed
+output and package workspace, so users do not have to scroll through the full player to inspect finished files.
+
+The URL persists selected source, selected output, compare mode, compare layout, and visible compare versions. It
+intentionally does not persist playback position, volume, zoom, pan, fullscreen state, wipe position, or unsaved form
+controls. Upload and URL import navigate to Prepare for the new source. Selecting a history or recent source with
+completed outputs defaults to Results unless the current URL explicitly requested Prepare; sources without completed
+outputs default to Prepare. Media jobs request a Results reveal only after completed output data is available.
+Back/forward and refresh restore the routed source when it exists. Missing sources show a recoverable message while the
+invalid URL is scrubbed to Library; invalid selected outputs are replaced with the nearest valid completed output.
+
 ## Phase 7B Frontend Workflow Hooks
 
 Phase 7B continues shrinking the app controller by moving cross-cutting workflow state into focused hooks:
@@ -392,3 +414,29 @@ generated tiny video so CI proves the browser can drive upload, encode, download
 developer media files.
 
 Production frontend code must not import E2E fixtures; lint rules keep test support outside app source imports.
+
+## Phase UI-A Product Surface
+
+Phase UI-A keeps the local-first media workflows and API contracts intact while reshaping the browser app into a more
+polished desktop utility. The product surface is organized around the practical website-video workflow: add a source,
+prepare the recommended website package, inspect results, customize only when needed, edit captions, compare playback,
+and return to the Library for previous sources.
+
+The CSS entrypoint remains `apps/web/src/styles.css`, but it now imports focused stylesheet layers:
+
+- `tokens.css` owns semantic light/dark theme variables, spacing, radii, shadows, typography, motion, and legacy aliases.
+- `reset.css` and `foundations.css` own base document behavior, forms, focus, and typography.
+- `layout.css`, `components.css`, and `responsive.css` own the redesigned shell, reusable primitives, workflow panels,
+  and viewport adjustments.
+- `features.css` preserves feature-specific selectors from the earlier app so behavior-facing class names remain stable
+  while the broader visual system is extracted.
+
+Reusable UI primitives stay under `apps/web/src/components/ui`. Phase UI-A adds a decorative app mark, status badges,
+and a more semantic settings group fieldset while continuing to keep network behavior in the API client and job-event
+adapter. Components still receive controller actions from the app hooks rather than calling `fetch`, constructing API
+URLs, or opening `EventSource` directly.
+
+The design favors dark mode by default with a deliberate light mode, compact density, clear source/job hierarchy,
+visible progress, and responsive narrow layouts without horizontal overflow. Screenshot review is intentionally
+deterministic and manual: `npm run review:ui-screens` captures representative app states into `.tmp/ui-review/` without
+committing image artifacts or adding brittle pixel-diff gates.

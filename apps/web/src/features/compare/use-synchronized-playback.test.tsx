@@ -1,63 +1,129 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { useSynchronizedPlayback } from "./use-synchronized-playback";
+import {
+  applyCompareAudioSource,
+  syncCompareVideos,
+  useSynchronizedPlayback,
+  type CompareVideoLike
+} from "./use-synchronized-playback";
+
+function fakeVideo(overrides: Partial<CompareVideoLike> = {}): CompareVideoLike {
+  return {
+    currentTime: 0,
+    duration: 42,
+    paused: true,
+    playbackRate: 1,
+    muted: false,
+    loop: false,
+    play: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn(),
+    ...overrides
+  };
+}
 
 function Harness() {
   const playback = useSynchronizedPlayback();
-  const { originalCompareRef, optimizedCompareRef, setSyncPlayback, syncPlayback, syncVideoState } = playback;
   return (
     <div>
       <label>
         Sync
-        <input type="checkbox" checked={syncPlayback} onChange={(event) => setSyncPlayback(event.target.checked)} />
+        <input
+          type="checkbox"
+          checked={playback.syncPlayback}
+          onChange={(event) => playback.setSyncPlayback(event.target.checked)}
+        />
       </label>
-      <video ref={originalCompareRef} data-testid="original" />
-      <video ref={optimizedCompareRef} data-testid="optimized" />
-      <button type="button" onClick={() => syncVideoState("original", "play")}>
-        play original
+      <video ref={playback.registerCompareVideo("source")} data-testid="source" />
+      <video ref={playback.registerCompareVideo("mp4")} data-testid="mp4" />
+      <video ref={playback.registerCompareVideo("webm")} data-testid="webm" />
+      <button type="button" onClick={() => playback.syncVideoState("source", "play")}>
+        play source
       </button>
-      <button type="button" onClick={() => syncVideoState("optimized", "pause")}>
-        pause optimized
+      <button type="button" onClick={() => playback.selectAudioSource("webm")}>
+        webm audio
       </button>
-      <button type="button" onClick={() => syncVideoState("original", "seek")}>
-        seek original
+      <button type="button" onClick={() => playback.seekAll(23.4)}>
+        seek all
       </button>
     </div>
   );
 }
 
-describe("useSynchronizedPlayback", () => {
-  it("propagates play, pause, and seek between media elements", async () => {
-    vi.useFakeTimers();
-    render(<Harness />);
-    const original = screen.getByTestId("original") as HTMLVideoElement;
-    const optimized = screen.getByTestId("optimized") as HTMLVideoElement;
-    const play = vi.spyOn(optimized, "play").mockResolvedValue(undefined);
-    const pause = vi.spyOn(original, "pause").mockImplementation(() => undefined);
+describe("compare synchronization", () => {
+  it("syncs play, seek, rate, and loop across multiple panes", () => {
+    const source = fakeVideo({ currentTime: 12, playbackRate: 1.25, loop: true });
+    const mp4 = fakeVideo({ currentTime: 0 });
+    const webm = fakeVideo({ currentTime: 11.95 });
+    const videos = new Map([
+      ["source", source],
+      ["mp4", mp4],
+      ["webm", webm]
+    ]);
 
-    original.currentTime = 12;
-    fireEvent.click(screen.getByRole("button", { name: /play original/i }));
-    act(() => vi.advanceTimersByTime(150));
-    optimized.currentTime = 7;
-    fireEvent.click(screen.getByRole("button", { name: /pause optimized/i }));
-    act(() => vi.advanceTimersByTime(150));
-    original.currentTime = 22;
-    fireEvent.click(screen.getByRole("button", { name: /seek original/i }));
+    syncCompareVideos({ sourceId: "source", videos, action: "play", syncEnabled: true });
 
-    expect(play).toHaveBeenCalledTimes(1);
-    expect(pause).toHaveBeenCalledTimes(1);
-    expect(optimized.currentTime).toBe(22);
-    vi.useRealTimers();
+    expect(mp4.currentTime).toBe(12);
+    expect(webm.currentTime).toBe(11.95);
+    expect(mp4.playbackRate).toBe(1.25);
+    expect(webm.loop).toBe(true);
+    expect(mp4.play).toHaveBeenCalledTimes(1);
+    expect(webm.play).toHaveBeenCalledTimes(1);
   });
 
-  it("does not propagate while synchronization is disabled", async () => {
+  it("pauses every non-source pane and respects disabled sync", () => {
+    const source = fakeVideo({ currentTime: 8 });
+    const mp4 = fakeVideo({ currentTime: 0 });
+    const videos = new Map([
+      ["source", source],
+      ["mp4", mp4]
+    ]);
+
+    syncCompareVideos({ sourceId: "source", videos, action: "pause", syncEnabled: false });
+    expect(mp4.pause).not.toHaveBeenCalled();
+
+    syncCompareVideos({ sourceId: "source", videos, action: "pause", syncEnabled: true });
+    expect(mp4.pause).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps only the selected audio source unmuted", () => {
+    const source = fakeVideo();
+    const mp4 = fakeVideo();
+    const webm = fakeVideo();
+    const videos = new Map([
+      ["source", source],
+      ["mp4", mp4],
+      ["webm", webm]
+    ]);
+
+    applyCompareAudioSource(videos, "mp4");
+    expect(source.muted).toBe(true);
+    expect(mp4.muted).toBe(false);
+    expect(webm.muted).toBe(true);
+
+    applyCompareAudioSource(videos, "muted");
+    expect([...videos.values()].every((video) => video.muted)).toBe(true);
+  });
+
+  it("hook registers three panes, seeks them together, and changes audio without playback drift", () => {
+    vi.useFakeTimers();
     render(<Harness />);
-    const optimized = screen.getByTestId("optimized") as HTMLVideoElement;
-    const play = vi.spyOn(optimized, "play").mockResolvedValue(undefined);
+    const source = screen.getByTestId("source") as HTMLVideoElement;
+    const mp4 = screen.getByTestId("mp4") as HTMLVideoElement;
+    const webm = screen.getByTestId("webm") as HTMLVideoElement;
+    vi.spyOn(mp4, "play").mockResolvedValue(undefined);
+    vi.spyOn(webm, "play").mockResolvedValue(undefined);
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /sync/i }));
-    fireEvent.click(screen.getByRole("button", { name: /play original/i }));
+    source.currentTime = 10;
+    fireEvent.click(screen.getByRole("button", { name: /play source/i }));
+    act(() => vi.advanceTimersByTime(90));
+    fireEvent.click(screen.getByRole("button", { name: /seek all/i }));
+    fireEvent.click(screen.getByRole("button", { name: /webm audio/i }));
 
-    expect(play).not.toHaveBeenCalled();
+    expect(mp4.currentTime).toBe(23.4);
+    expect(webm.currentTime).toBe(23.4);
+    expect(source.muted).toBe(true);
+    expect(mp4.muted).toBe(true);
+    expect(webm.muted).toBe(false);
+    vi.useRealTimers();
   });
 });

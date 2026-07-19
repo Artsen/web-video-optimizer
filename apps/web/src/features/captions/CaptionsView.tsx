@@ -14,20 +14,20 @@ export function CaptionsView({ controller }: { controller: VideoOptimizerAppCont
     <section className="workflow-section" id="captions">
       <SectionHeader
         icon={<Captions size={21} />}
-        title="Subtitle Theatre"
-        kicker="Preview captions like a browser text track, then clean up the WebVTT source."
+        title="Captions"
+        kicker="Review captions as website accessibility assets, preview them on video, and save VTT/SRT output."
       />
       {captions.editingSubtitleJob ? (
         <div className="caption-theater">
           <div className="subtitle-editor-header">
             <div>
               <strong>{captions.editingSubtitleJob.outputFileName ?? "Generated captions"}</strong>
-              <span>Save updates the VTT file and regenerates the SRT sidecar.</span>
+              <span>Save updates the VTT file and regenerates the SRT sidecar for the website package.</span>
             </div>
             <div className="actions">
-              <button className="button secondary" type="button" onClick={() => navigation.setActiveView("outputs")}>
+              <button className="button secondary" type="button" onClick={() => navigation.setActiveView("results")}>
                 <Package size={17} />
-                Back To Outputs
+                Back To Results
               </button>
               <button
                 className="button primary"
@@ -109,9 +109,9 @@ export function CaptionsView({ controller }: { controller: VideoOptimizerAppCont
       ) : (
         <div className="panel empty-panel">
           <SectionHeader icon={<Captions size={20} />} title="No Captions Selected" />
-          <p className="muted">Open a completed caption output from Jobs & Outputs to review and edit it here.</p>
-          <button className="button secondary" type="button" onClick={() => navigation.setActiveView("outputs")}>
-            Back To Outputs
+          <p className="muted">Open a completed caption artifact from Results to review and edit it here.</p>
+          <button className="button secondary" type="button" onClick={() => navigation.setActiveView("results")}>
+            Back To Results
           </button>
         </div>
       )}

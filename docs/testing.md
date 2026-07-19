@@ -114,6 +114,16 @@ npm run test:e2e:report
 
 Playwright artifacts are written to `test-results/` and `playwright-report/` and are intentionally ignored by Git.
 
+Run the deterministic UI screenshot review pass:
+
+```bash
+npm run review:ui-screens
+```
+
+This command builds the app, runs a mocked Playwright visual-review spec, and writes representative desktop, narrow,
+dark-mode, light-mode, dialog, source, results, custom, library, and storage screenshots to `.tmp/ui-review/`.
+Screenshots are for manual inspection only; they are not committed and are not compared by CI.
+
 ## Current Test Scope
 
 The initial unit tests cover pure behavior extracted from the current API and web entry files:
@@ -325,6 +335,21 @@ Coverage includes:
 The mocked tests intentionally do not decode real media. The `@real-stack` test verifies the browser can drive the
 compiled API, but it remains narrow so CI stays fast and deterministic. Manual smoke testing is still useful for long
 videos, real subtitle generation through whisper.cpp, and real YouTube imports through yt-dlp.
+
+## Phase UI-A Visual QA
+
+Phase UI-A updates the browser presentation without changing API requests, response contracts, codec defaults, storage
+policy, job lifecycle behavior, or media processing. Fast frontend tests cover the updated shell language, upload panel,
+current job progress, status badges, and decorative app mark. Existing Playwright coverage continues to assert keyboard
+navigation, theme switching, route-mocked optimize/custom/library/package flows, poster dialog focus behavior,
+representative axe scans, console-error gates, failed-request gates, and one compiled-stack upload/encode/download smoke.
+
+The screenshot review pass complements those tests by capturing states that are hard to assert with jsdom: empty shell,
+selected source, source-without-outputs, compact Results, restored Results routes, custom settings, library, storage
+pressure, poster dialog, light theme, dark theme, and narrow viewport layout. Reviewers should inspect
+`.tmp/ui-review/` for clipping, awkward wrapping, visual hierarchy problems, accidental horizontal overflow, illegible
+contrast, duplicated chrome, and whether the Prepare-to-Results flow reads as one source workspace rather than two
+competing screens before approving UI-focused changes.
 
 ## Phase 8A Storage Capacity Tests
 

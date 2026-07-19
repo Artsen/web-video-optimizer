@@ -9,17 +9,14 @@ test("uploads a file, sends current settings to pair, subscribes to both jobs, a
   const api = await installMockApi(page);
 
   await page.goto("/");
-  await page.getByLabel("Select Video").setInputFiles({
+  await page.getByLabel("Choose Video").setInputFiles({
     name: "homepage-video.mp4",
     mimeType: "video/mp4",
     buffer: Buffer.from("not-real-media-for-mocked-ui")
   });
 
-  await expect(page.getByLabel("Source filename")).toHaveValue("homepage-video.mp4");
-  await page
-    .getByRole("navigation", { name: "Workspace views" })
-    .getByRole("button", { name: /Jobs & Outputs/ })
-    .click();
+  await expect(page.locator(".source-title-button", { hasText: "homepage-video.mp4" })).toBeVisible();
+  await expect(page).toHaveURL(/view=prepare/);
   await page.getByRole("button", { name: "Optimize For Website" }).click();
 
   const pairRequest = api.requests.find((request) => request.url === "/api/videos/video-1/pair");
@@ -42,9 +39,45 @@ test("uploads a file, sends current settings to pair, subscribes to both jobs, a
     [fallbackJob, modernJob]
   );
 
+  await expect(page).toHaveURL(/view=results/);
   await expect(page.locator(".output-kind", { hasText: "MP4 fallback" })).toBeVisible();
+  const resultsHeadingBox = await page.getByRole("heading", { name: "Results" }).boundingBox();
+  expect(resultsHeadingBox ? resultsHeadingBox.y >= 0 : false).toBe(true);
   await expect(page.locator(".output-kind", { hasText: "Modern AV1" })).toBeVisible();
-  await expect(page.getByText("WebP poster")).toBeVisible();
+  await expect(page.locator(".output-kind", { hasText: "WebP poster" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Compare all versions" }).click();
+  await expect(page.getByRole("heading", { name: "Compare" })).toBeVisible();
+  await expect(page.locator(".compare-pane")).toHaveCount(3);
+  await expect(page.getByRole("group", { name: "Synchronized comparison controls" })).toBeVisible();
+  await page.getByRole("button", { name: "2-up" }).click();
+  await expect(page).toHaveURL(/layout=two/);
+  await expect(page).toHaveURL(/versions=/);
+  await page.getByLabel("Comparison audio source").selectOption("modern-job");
+  await expect(page.getByLabel("Comparison audio source")).toHaveValue("modern-job");
+  await page.getByRole("button", { name: "Wipe" }).click();
+  await expect(page).toHaveURL(/mode=wipe/);
+  await expect(page.getByTestId("compare-wipe")).toBeVisible();
+  await page.getByLabel("Wipe divider position").fill("64");
+  await expect(page.getByLabel("Wipe divider position")).toHaveValue("64");
+  await expect(page).not.toHaveURL(/wipe=64|time=|zoom=|pan=/);
+  await page.getByRole("button", { name: "A/B" }).click();
+  const abCompare = page.getByTestId("compare-ab");
+  await expect(abCompare).toBeVisible();
+  await expect(abCompare.locator(".ab-shortcut")).toBeVisible();
+  const helperBox = await abCompare.locator(".ab-shortcut").boundingBox();
+  const footerBox = await abCompare.locator(".compare-pane-footer").boundingBox();
+  expect(helperBox && footerBox ? helperBox.y + helperBox.height < footerBox.y : false).toBe(true);
+  await abCompare.getByRole("button", { name: "Original", exact: true }).click();
+  await expect(abCompare.getByRole("button", { name: "Original", exact: true })).toHaveClass(/active/);
+  await page.keyboard.down("o");
+  await page.keyboard.up("o");
+  await page.getByRole("button", { name: "Grid" }).click();
+  await page.getByRole("button", { name: "Zoom comparison to 200%" }).click();
+  await page.getByRole("button", { name: "Reset comparison view" }).click();
+  await page.getByRole("button", { name: "Next approximate frame" }).click();
+  await page.goBack();
+  await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
 
   const downloadPromise = page.waitForEvent("download");
   await page
@@ -76,13 +109,15 @@ test("supports custom optimization failure presentation without console errors",
   });
 
   await page.goto("/");
-  await page.getByLabel("Select Video").setInputFiles({
+  await page.getByLabel("Choose Video").setInputFiles({
     name: "homepage-video.mp4",
     mimeType: "video/mp4",
     buffer: Buffer.from("mock")
   });
-  await page.getByRole("navigation", { name: "Workspace views" }).getByRole("button", { name: "Custom" }).click();
+  await page.getByRole("button", { name: "Source options" }).click();
+  await page.getByRole("menuitem", { name: "Custom export" }).click();
   await page.getByRole("button", { name: "Export Current Settings" }).click();
+  await expect(page).toHaveURL(/view=custom/);
   await expect(page.locator(".global-error", { hasText: "Request validation failed." })).toBeVisible();
   await assertNoBrowserErrors();
 });

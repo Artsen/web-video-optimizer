@@ -8,16 +8,21 @@ export function CurrentJobs({ jobs, onCancel }: { jobs: JobDto[]; onCancel(job: 
     <section className="panel job-queue">
       <SectionHeader icon={<Gauge size={20} />} title="Current Jobs" />
       {jobs.length === 0 ? (
-        <p className="muted">No jobs running. Start the recommended website package or create a custom export.</p>
+        <p className="muted">No active work. Start the recommended website package or create a custom export.</p>
       ) : (
         <div className="job-list">
           {jobs.map((runningJob) => (
             <div className="job-row" key={runningJob.id}>
               <div>
                 <strong>{jobTitle(runningJob)}</strong>
-                <span>{runningJob.message ?? runningJob.status}</span>
+                <span>
+                  {runningJob.status === "queued" ? "Queued for processing" : (runningJob.message ?? runningJob.status)}
+                </span>
               </div>
-              <progress value={runningJob.progress} max="100" />
+              <div className="job-progress">
+                <progress value={runningJob.progress} max="100" aria-label={`${jobTitle(runningJob)} progress`} />
+                <span>{Math.round(runningJob.progress)}%</span>
+              </div>
               <button className="button secondary" type="button" onClick={() => void onCancel(runningJob)}>
                 Cancel
               </button>
