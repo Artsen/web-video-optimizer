@@ -1,442 +1,166 @@
 # Architecture
 
-## Overview
+Web Video Optimizer is a local-first web app with a React browser client, an Express API, shared runtime contracts, and FFmpeg-backed media workers. The system is designed around small service boundaries so video processing, storage cleanup, package generation, captions, and UI routing can evolve without changing the public API casually.
 
-The app has two local services:
+## System Context
 
-- `apps/web`: React + TypeScript UI served by Vite.
-- `apps/api`: Express API that receives uploads, runs FFprobe/FFmpeg, and streams local files.
-- `packages/contracts`: shared Zod schemas and inferred TypeScript types for public API/browser data.
-- `packages/video-core`: pure media-domain calculations and transformations shared by current and future adapters.
+```mermaid
+flowchart LR
+  Browser[React web app] -->|JSON, uploads, SSE, byte ranges| API[Express API]
+  API --> Contracts[Shared contracts]
+  API --> Core[video-core helpers]
+  API --> Storage[(Managed storage root)]
+  API --> Manifest[(manifest.json)]
+  API --> FFmpeg[FFmpeg / FFprobe]
+  API --> Whisper[optional whisper.cpp]
+  API --> YtDlp[optional yt-dlp]
+  Browser -->|localStorage route state| BrowserState[(Browser state)]
+```
 
-Docker Compose runs both services and installs FFmpeg in the API image.
+The API is intentionally local and unauthenticated. CORS defaults only allow the local development origins. LAN binding is available through explicit configuration and should be treated as trusted-network-only operation.
 
-## Shared Contracts
+## Processing Flow
 
-`packages/contracts` owns public cross-application schemas and types for video metadata, optimization settings, jobs,
-history, capabilities, and website package metadata. These contracts describe the data passed between the API and the
-browser and are intended to be reused by future CLI and MCP adapters.
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant W as Web app
+  participant A as API
+  participant S as Storage
+  participant F as FFmpeg/FFprobe
 
-The contracts package does not contain business execution logic, React components, Express route handlers, filesystem
-paths, child-process behavior, FFmpeg command execution, or persistence code. API-private entities remain in `apps/api`,
-including stored upload paths, output paths, sidecar paths, process handles, storage configuration, raw FFprobe
-structures, and Express/Multer objects. Browser-only UI types remain in `apps/web`, including component props, modal
-state, tab/view state, presentation metadata, and React nodes.
+  U->>W: Add source
+  W->>A: POST /api/videos
+  A->>S: Stage and admit upload
+  A->>F: Probe metadata
+  A->>S: Persist source and manifest
+  A-->>W: Video record
+  U->>W: Optimize for website
+  W->>A: POST /api/videos/:id/pair
+  A->>A: Queue compatible + modern jobs
+  W->>A: GET /api/jobs/:id/events
+  A->>F: Run bounded media process
+  A->>S: Save output, update manifest
+  A-->>W: Completed job
+  W->>A: GET /api/jobs/:id/output
+  A-->>W: Inline media with byte-range support
+```
 
-The contracts package defines public data shapes only; reusable media behavior belongs in `packages/video-core`.
+## Workspace Layout
 
-## Video Core
+- `apps/api` contains the Express server, runtime composition, route validation, storage boundary, repositories, schedulers, and media services.
+- `apps/web` contains the React app, route state, feature views, browser API client, Playwright tests, and UI styles.
+- `packages/contracts` contains shared DTO and encoding schemas used by both API and web.
+- `packages/video-core` contains pure filename, encoding, metadata, and progress helpers.
+- `docs` contains user, developer, architecture, testing, and troubleshooting documentation.
+- `data` is local runtime media storage and must remain untracked.
+- `.tmp` is local review/test scratch space and must remain untracked.
 
-`packages/video-core` owns deterministic media-domain behavior such as optimization-setting normalization, FFmpeg
-argument-array construction, FFprobe result normalization, browser-oriented compatibility analysis, filename
-sanitization, caption timestamp/VTT utilities, and output-size estimation. It consumes shared DTO and settings types
-from `packages/contracts` and has no dependency on React, Express, filesystem access, child processes, or environment
-configuration.
+## Public Contracts
 
-The API remains responsible for HTTP routes, byte-range delivery, process execution, FFmpeg/FFprobe/Whisper/yt-dlp
-invocation, storage, job state, manifests, ZIP creation, and persistence. The web app remains responsible for React
-components, presentation wording, form-state behavior, recommendations, and browser UI state. Future CLI and MCP
-adapters should consume `packages/contracts` and `packages/video-core` rather than copying media-domain logic.
+The API accepts and returns DTOs from `packages/contracts` rather than exposing internal entities. Request validation is strict: unknown keys are rejected, IDs are sanitized, JSON bodies are size-limited, and filenames cannot contain path separators or ASCII control characters.
+
+The `video-core` package holds pure logic that is useful on either side of the boundary, including FFmpeg argument construction, filename sanitization, metadata derivation, and progress parsing. This keeps behavior testable without starting the server.
 
 ## API Composition
 
-`apps/api/src/app.ts` exports `createApp(dependencies)`, the HTTP composition root used by tests and production. It
-registers middleware, route modules, and error handling, but it does not listen on a port, create storage directories,
-load manifests, or spawn media tools.
+`createProductionRuntime` wires the production dependencies once:
 
-`apps/api/src/server.ts` is the production startup adapter. It parses environment configuration, creates the production
-runtime, initializes storage and manifests, constructs the upload middleware, creates the Express app, and calls
-`listen`.
+- repositories for videos and jobs
+- manifest persistence
+- media probing
+- FFmpeg capability checks
+- optional whisper.cpp and yt-dlp adapters
+- job lifecycle and scheduling services
+- process registry and process runner
+- storage boundary, reservations, capacity checks, and housekeeping
+- cleanup, package, caption, video, and job services
 
-Route modules in `apps/api/src/routes` are HTTP adapters. They extract request params, request bodies, multipart files,
-status codes, response headers, SSE mechanics, downloads, and byte-range streaming. They depend on the temporary
-coarse `ApiRuntime` boundary rather than global maps or production storage details.
+Routes depend on the runtime interface rather than constructing services directly. This keeps tests fast and lets integration tests run against the compiled API without changing route code.
 
-The HTTP validation boundary is API-private. `apps/api/src/validation` contains Zod schemas and small parsing helpers
-for route params, JSON bodies, safe identifiers, filenames, YouTube import URLs, captions, package requests, and
-optimization settings. Route adapters validate at the edge and pass typed values into `ApiRuntime`; services still own
-business normalization and workflow behavior.
+## Job Lifecycle
 
-`apps/api/src/errors` and `apps/api/src/middleware` map known API failures to stable JSON responses. Validation errors,
-invalid JSON, oversized JSON, unsupported media types, denied CORS origins, and unknown API routes keep a top-level
-`error` field plus a stable `code`. Unknown internal exceptions are logged server-side and returned as generic
-`INTERNAL_ERROR` responses without leaking filesystem paths, command arguments, or process details.
-
-The API binds to `127.0.0.1` by default. Binding to `0.0.0.0`, `::`, or another non-loopback host requires
-`ALLOW_LAN_ACCESS=true` and remains a trusted-network feature without authentication. CORS uses an exact normalized
-origin allowlist from `CORS_ORIGIN`, defaulting to the two local Vite origins. The API disables Express fingerprinting
-and sets conservative API security headers without adding HSTS, CSP, or resource policies that would break local HTTP,
-downloads, byte ranges, SSE, or media preview.
-
-`apps/api/src/runtime/production-runtime.ts` is the production composition root and `ApiRuntime` facade. It constructs
-runtime-scoped repositories, the file manifest store, process infrastructure, tool adapters, and focused application
-services, then delegates route-facing operations through the stable `ApiRuntime` interface.
-
-Internal API entities live under `apps/api/src/entities`. They contain storage paths, output paths, sidecar paths, and
-source hashes needed for local persistence and recovery. Public JSON responses are still constructed through explicit
-DTO mappers in `apps/api/src/dto`, so private implementation fields do not leak into browser responses.
-
-Repository instances are created per production runtime. They are not global singletons, which allows independently
-created runtimes to keep video state, job state, directory configuration, and manifest restoration isolated.
-
-Process creation is behind `ProcessRunner`, with the Node implementation isolated in
-`apps/api/src/infrastructure/processes/node-process-runner.ts`. Running job processes are tracked through a
-runtime-scoped `ProcessRegistry`. Tool-specific behavior is behind infrastructure adapters for FFprobe, FFmpeg encoder
-capability detection, whisper.cpp resolution, yt-dlp importing, and desktop file reveal behavior.
-
-Short command-style tool calls run through `CommandRunner`, which supervises the child process, enforces
-`TOOL_COMMAND_TIMEOUT_MS`, captures stdout with a hard byte limit, and keeps only a bounded stderr tail for diagnostics.
-Long media workflows use the same process-supervision primitive with `MEDIA_PROCESS_TIMEOUT_MS`. Timed-out media
-processes receive `SIGTERM`, then `SIGKILL` after `PROCESS_KILL_GRACE_PERIOD_MS`, and finally force-settle so scheduler
-slots cannot remain occupied forever. Captured process output is bounded by `MAX_CAPTURED_PROCESS_OUTPUT_BYTES`.
-
-Process-backed media jobs are admitted through a runtime-scoped bounded FIFO scheduler. `MAX_CONCURRENT_MEDIA_JOBS`
-controls the number of concurrent media slots and defaults to `1`, because local video encoding is CPU-intensive.
-Encode, sample, poster, subtitle generation, and subtitle mux jobs consume scheduler slots. Website package jobs remain
-outside the media scheduler because package creation reads completed files and assembles a ZIP without spawning FFmpeg,
-Whisper, or another media process. During runtime shutdown, the scheduler stops accepting new work, drops queued
-callbacks, and can wait for running tasks to settle.
-
-Job lifecycle transitions are explicit API-private behavior. Valid transitions are `queued -> running`,
-`queued -> canceled`, `queued -> failed`, `running -> completed`, `running -> failed`, and `running -> canceled`.
-Terminal jobs cannot be rewritten by late process events. The scheduler controls capacity only; services and lifecycle
-helpers own repository state, progress, cancellation, artifact cleanup, and persistence calls.
-
-Application services own API-private workflows:
-
-- `StatePersistenceService`: serialized manifest save requests, flush boundaries, manifest load/recovery policy, and
-  restart cancellation normalization.
-- `CleanupService`: queued-task cancellation, job artifact deletion, active-process termination, video deletion cascades,
-  and orphan pruning.
-- `VideoService`: upload/import storage, content hashing, duplicate detection, metadata probing, rename, source
-  descriptors, downloads, and video deletion delegation.
-- `JobService`: job lookup, optimization/sample/poster/pair creation, reuse policy, descriptors, rename, cancellation,
-  deletion, scheduler enqueueing, reveal delegation, and public job DTO mapping.
-- `JobExecutionService`: FFmpeg-backed encode, sample, poster, and subtitle-mux process lifecycles, progress parsing,
-  stderr message updates, output-size capture, sample estimates, registry cleanup, artifact cleanup on failure, and
-  promise settlement for scheduler slot release.
-- `CaptionService`: subtitle-job validation/reuse/creation, leading-silence detection, audio extraction, whisper.cpp
-  transcription, VTT/SRT handling, caption editing, subtitle scheduler enqueueing, and subtitle-mux
-  validation/delegation.
-- `PackageService`: website-package request interpretation, selected-output reading, generated HTML/README/transcript
-  creation, ZIP assembly, package-job completion, and public result mapping.
-- `CapabilitiesService`: combines FFmpeg, whisper.cpp, and yt-dlp capability reporting.
-- Packaging helpers remain API-private under `apps/api/src/services/helpers`.
-
-The production runtime constructs this graph and returns an `ApiRuntime` facade:
-
-```text
-routes
-  ->
-ApiRuntime
-  ->
-production-runtime composition
-  |-- CapabilitiesService
-  |-- VideoService
-  |-- JobService
-  |-- JobExecutionService
-  |-- CaptionService
-  |-- PackageService
-  |-- CleanupService
-  |-- JobScheduler
-  `-- StatePersistenceService
-      ->
-repositories, manifest store, process/tool infrastructure
+```mermaid
+stateDiagram-v2
+  [*] --> queued
+  queued --> running
+  queued --> canceled
+  queued --> failed
+  running --> completed
+  running --> failed
+  running --> canceled
+  completed --> [*]
+  failed --> [*]
+  canceled --> [*]
 ```
 
-Routes continue to depend only on `ApiRuntime` and route-safe DTO types. Future CLI and MCP adapters should call the
-same application services, or a facade over them, rather than duplicating media workflow logic.
+The scheduler enforces `MAX_CONCURRENT_MEDIA_JOBS`. Queued cancelation prevents execution, running cancelation terminates the active process, and shutdown cancelation cleans partial artifacts before persistence. Job snapshots are copied so callers cannot mutate scheduler internals.
+
+## Storage Model
+
+```mermaid
+erDiagram
+  VIDEO ||--o{ JOB : owns
+  VIDEO {
+    string id
+    string originalName
+    string storedFileName
+    number sizeBytes
+    object metadata
+  }
+  JOB {
+    string id
+    string videoId
+    string type
+    string status
+    number progress
+    string outputFileName
+    string sidecarFileName
+  }
+```
+
+Managed storage lives under `STORAGE_ROOT`:
+
+- `uploads` stores admitted source videos.
+- `outputs` stores completed job artifacts and packages.
+- `tmp` stores temporary work files and upload staging.
+- `manifest.json` stores durable history.
+
+The storage boundary resolves files by managed area, blocks traversal, and opens files through descriptors. Cleanup removes canceled jobs, deleted videos, orphan files, stale temporary files, and partial failed outputs. Capacity checks can reserve bytes before paired website jobs so one output is not admitted unless the pair can be scheduled safely.
 
 ## Persistence And Recovery
 
-The manifest storage shape remains:
+The manifest store writes through a temporary file and keeps a backup of the last valid manifest. On API startup, the runtime loads history, restores completed jobs with existing outputs, marks interrupted queued/running jobs appropriately, skips dangling jobs, merges duplicate videos, prunes orphan files, and saves a fresh manifest.
 
-```json
-{
-  "videos": [],
-  "jobs": []
-}
-```
+## Media Capabilities
 
-The primary manifest is written with serialized save requests. Each write is staged to a unique temporary file in the
-same directory, flushed, then atomically renamed over the primary manifest. Before replacement, the previous valid
-primary is preserved as `manifest.json.bak`. A corrupt primary is never treated as empty state: startup recovers from a
-valid backup when possible, and fails clearly when neither primary nor backup can be validated.
+FFprobe extracts metadata and subtitle-track status. FFmpeg handles optimization, posters, packages, remuxed subtitles, and byte-range-friendly preview outputs. Optional whisper.cpp can generate captions locally when configured. Optional yt-dlp can import videos from validated YouTube URLs.
 
-Manifest validation is API-private. It validates the top-level object, `videos` and `jobs` arrays, public nested DTO
-fields, and private restoration fields such as `storedPath`, `sourceHash`, `outputPath`, and `sidecarPath`.
+## Frontend Model
 
-Queued and running jobs are persisted as their actual in-memory statuses. On API restart, restored queued or running
-jobs are normalized to canceled history with `Canceled by API restart`, progress reset to `0`, and partial output,
-sidecar, and job-specific temporary artifacts removed. Completed jobs whose required output is missing are restored as
-failed with `Output missing during API restart recovery`. Jobs referencing missing videos are skipped.
+The web app has a small bootstrap in `main.tsx`, a production app factory, route helpers, feature-local hooks, and focused views for Prepare, Results, Compare, Library, Settings, captions, posters, and packages.
 
-Initialization creates directories, validates and restores the manifest, normalizes interrupted state, merges duplicate
-videos, prunes true orphan files, saves the normalized manifest, and flushes persistence before resolving. Orphan pruning
-does not run after unrecoverable manifest corruption.
+Prepare and Results are progressive states of the same source workspace:
 
-## Graceful Shutdown
+- new or unprocessed sources open in Prepare
+- processed historical sources default to Results
+- explicit Prepare URLs stay in Prepare
+- refresh and browser navigation restore selected source and view
 
-The production runtime exposes an API-private `shutdown()` operation. Routes do not expose shutdown controls. Shutdown
-stops scheduler acceptance, cancels queued callbacks, marks queued/running jobs as canceled with `Canceled by API
-shutdown`, terminates registered media processes with `SIGTERM`, waits up to `SHUTDOWN_GRACE_PERIOD_MS`, then sends
-`SIGKILL` where supported for remaining processes. Final state is saved and flushed before shutdown resolves. On
-Windows, external signal termination of a child Node process behaves more like process termination than POSIX graceful
-shutdown, so restart recovery remains the source of truth for interrupted jobs in that path.
+Compare stores selected output, mode, layout, and visible versions in the URL. Volatile playback state such as time, volume, zoom, pan, wipe position, and fullscreen is not persisted.
 
-`apps/api/src/server-lifecycle.ts` retains the HTTP server handle and installs one shared `SIGINT`/`SIGTERM` shutdown
-path. The server stops accepting new connections, closes idle connections where Node supports it, waits for runtime
-shutdown, and reports shutdown failures with a nonzero exit code.
+## Testing Boundaries
 
-Phase 5C adds process-output limits, normal execution timeouts, stronger process containment, and automated real-media
-integration coverage. Retry/resume policy is intentionally still future work.
+Fast tests cover pure packages, API services, route validation, storage policy, scheduler behavior, frontend derivations, and representative UI components. Playwright tests cover browser workflows, accessibility scans, console gating, and a tiny real-stack encode path. The compiled API integration suite uses real FFmpeg/FFprobe for upload, encoding, range streaming, poster generation, packages, cleanup, timeout, cancelation, and recovery behavior.
 
-Public JSON responses are now constructed through explicit DTO mappers in `apps/api/src/dto`. Contracts remain the
-public response authority. Private implementation fields such as absolute filesystem paths, source hashes, output
-paths, and sidecar paths are no longer part of public JSON responses.
+See [Testing](testing.md) for command details.
 
-## Data Flow
+## Extension Points
 
-1. The user drops a video into the browser.
-2. The web app uploads it to `POST /api/videos`.
-3. Multer writes the request body to upload staging under the local storage root.
-4. The API admits the staged candidate through filename, signature, FFprobe, duplicate, and storage-boundary checks.
-5. The API moves accepted media into permanent source storage and persists the manifest.
-6. The API returns normalized metadata plus compatibility warnings.
-7. The user chooses optimization settings.
-8. The web app starts an encoding job with `POST /api/videos/:id/jobs`.
-9. The route layer delegates job creation to `ApiRuntime`.
-10. The API enqueues process-backed media work through the bounded scheduler.
-11. When a media slot is available, the API starts FFmpeg/Whisper through the process-runner boundary and updates
-    repository-backed job state through explicit lifecycle transitions.
-12. The web app listens to `GET /api/jobs/:id/events` and polls job state as a fallback.
-13. The final output is streamed from `GET /api/jobs/:id/download`.
+Near-term extension work should stay within the existing boundaries:
 
-## Storage
-
-The API uses a local storage root with these subdirectories:
-
-- `uploads`: admitted original source files
-- `outputs`: optimized files
-- `tmp`: scratch space for imports, media processing, and package assembly
-- `tmp/upload-staging`: Multer 2 staging area for incoming browser uploads
-
-The Docker setup stores this under a named Docker volume called `video_data`.
-
-`StorageBoundary` owns the explicit storage areas `uploads`, `outputs`, `tmp`, and `upload-staging`. It is responsible
-for root canonicalization, lexical containment, existing-file realpath containment, symlink rejection, regular-file
-checks, safe target validation, safe reads, safe moves, safe removals, and orphan pruning. It does not own repository
-state, DTO mapping, Express responses, job lifecycle transitions, or optimization settings.
-
-Initialization creates managed directories, verifies that each managed root is a real non-symlink directory, records
-canonical real paths, and confirms every area remains beneath `STORAGE_ROOT`. Integrity failures happen before manifest
-restoration or orphan pruning. This prevents a bad root or tampered manifest from causing cleanup against external
-paths.
-
-Persisted manifest paths are treated as untrusted private state. `VideoEntity.storedPath` must validate as `uploads`;
-`JobEntity.outputPath` and `JobEntity.sidecarPath` must validate as `outputs`. Contained missing files follow existing
-restart recovery policy, but external or symlink-backed paths fail startup safely before rewrite or pruning.
-
-Upload staging uses a transaction-like lifecycle:
-
-1. Multer writes one expected `video` file to `tmp/upload-staging` with an internal filename.
-2. Admission validates the staged candidate is contained, regular, nonempty, and within `UPLOAD_FILE_SIZE_LIMIT_BYTES`.
-3. The original filename is validated as display metadata only.
-4. A bounded prefix read checks plausible container signatures without loading the full video or parsing codecs.
-5. The staged file is hashed and checked for duplicates.
-6. FFprobe validates a supported container with at least one real temporal video stream, finite positive dimensions, and
-   finite positive duration.
-7. The API chooses a canonical extension, generates an internal ID, and builds a controlled permanent path.
-8. The file moves into `uploads`, the repository entity is inserted, and the manifest is persisted.
-9. Duplicate, probe, move, repository, or persistence failures remove staged/permanent files where possible and leave no
-   visible duplicate record.
-
-Client filename, extension, and MIME claims are never authoritative. Valid media sent as `application/octet-stream` may
-be accepted; fake media declared as `video/mp4` is rejected by signature/probe admission. Audio-only files, still-image
-or attached-cover-art-only media, corrupt containers, truncated containers, unsupported containers, probe timeout, and
-probe overflow are rejected.
-
-URL imports use the same admission flow after `yt-dlp` writes a temporary file beneath `tmp`. A successful `yt-dlp` exit
-alone is not enough to create a video entity.
-
-Streaming and downloads use contained descriptors rather than raw `res.download()` calls. Source, output, sidecar,
-poster, and package responses open files after storage validation, use the opened file size for full/range responses,
-preserve existing `206`/`416` byte-range behavior, and close file handles on completion, request abort, and stream
-errors. `Content-Disposition` filenames are sanitized to remove path separators, quotes, and CR/LF with a nonempty
-fallback.
-
-Filesystem race limitations remain the normal portable Node.js limitations: containment is checked before open and the
-opened handle is `fstat` checked, but Node does not provide one cross-platform `O_NOFOLLOW` flow for every operation.
-The implementation therefore uses lexical checks, `lstat`, symlink rejection, `realpath`, and handle/stat validation
-where supported and tests the real symlink case on Ubuntu CI.
-
-## Storage Capacity And Housekeeping
-
-Phase 8A adds capacity awareness without changing the durable-history model. `NodeStatfsCapacityProvider` is the only
-production adapter that asks the filesystem for available and total bytes. It is injected into the production runtime,
-so routes and application services do not import `statfs` directly and tests can use deterministic fakes.
-
-`ManagedStorageInventoryService` measures regular files under the managed `uploads`, `outputs`, `tmp`, and
-`tmp/upload-staging` areas. It does not follow symlinks, does not scan the repository, and does not expose filenames or
-paths. The public DTO reports aggregate byte and file counts plus stale temporary totals only.
-
-`StoragePolicyService` combines filesystem capacity, managed usage, runtime reservations, and configuration. Public
-`managedBytes` represents actual inventoried files only; public `reservedBytes` represents runtime-scoped queued or
-active work. Admission and pressure decisions use `managedBytes + reservedBytes` internally.
-
-- `MIN_FREE_STORAGE_BYTES` is a hard reserve that must remain after new work is admitted.
-- `MAX_MANAGED_STORAGE_BYTES=0` means no app-managed quota; positive values cap managed uploads, outputs, temp files,
-  and active reservations.
-- Pressure is `critical` when available bytes are at or below the reserve or managed usage reaches the configured quota.
-- Pressure is `warning` when available bytes are within twice the reserve or managed usage reaches 80% of the quota.
-
-Uploads, URL imports, encode/sample/poster/subtitle/mux jobs, and package creation estimate required bytes before
-admission. Runtime-scoped reservations prevent obvious concurrent overcommit and are released on success, failure,
-cancellation, request abort, or shutdown. Pair jobs reserve the missing fallback and modern outputs as one batch before
-creating new records, so unrelated admissions cannot interleave between the two halves.
-
-Capacity failures use `507 INSUFFICIENT_STORAGE` with operation-specific safe messages. Configured upload-size failures
-remain `413 UPLOAD_TOO_LARGE`. Process-backed disk-full signals are mapped from `ENOSPC` or bounded stderr patterns,
-then partial artifacts are removed where possible without hiding cleanup failures in public responses.
-
-`StorageHousekeepingService` is runtime-scoped. It runs once after storage and manifest initialization, then periodically
-with `HOUSEKEEPING_INTERVAL_MS`; overlapping runs are skipped, timers are cleared during shutdown, and the timer is
-`unref()`ed. Housekeeping and `POST /api/storage/cleanup` remove stale files from `tmp` and `tmp/upload-staging` only.
-They do not automatically delete referenced source uploads, completed outputs, `manifest.json`, or `manifest.json.bak`.
-
-Manifest writes remain fail-safe through the file manifest store: writes stage a temporary manifest in the same
-directory, keep the last valid primary as backup, and surface persistence failures. Phase 8A reserves small manifest
-overhead with storage-producing operations but does not introduce a durable retention policy.
-
-The browser reads storage status through the typed API client, not direct `fetch`. The Library storage panel presents
-managed usage, reserved work, available disk space, quota, pressure copy, area breakdowns, and temporary cleanup. It
-never receives private storage paths, filenames, hashes, or platform device identifiers.
-
-## Security And Privacy
-
-The app is intended for trusted local use. It avoids cloud APIs and remote processing. The backend sanitizes generated
-filenames and never executes shell strings; FFmpeg is invoked with argument arrays.
-
-Phase 6A hardens network defaults, CORS, route validation, JSON limits, error mapping, and API headers. Phase 6B hardens
-upload admission, MIME/extension spoofing resistance, storage-path containment, symlink rejection, and the Multer 2
-migration. For a production-grade local release, also consider automatic retention cleanup and optional authentication
-for LAN exposure.
-
-## Frontend Application Boundary
-
-Phase 7A makes the web entrypoint a bootstrap file. `apps/web/src/main.tsx` creates production dependencies once, imports
-global CSS, and renders `App`.
-
-The frontend now has explicit seams:
-
-- `api/api-client.ts` owns JSON requests, multipart upload, empty responses, and safe API error parsing.
-- `api/urls.ts` owns media, download, sidecar, and EventSource URL construction.
-- `api/job-events.ts` owns browser `EventSource` construction and terminal cleanup.
-- `app/App.tsx` owns application orchestration through injected dependencies.
-- `domain/*` owns pure selectors, formatting helpers, and job presentation helpers.
-- `components/ui/*` owns reusable visual primitives while preserving existing class names.
-- `features/poster/PosterLightbox.tsx` owns poster lightbox rendering and local interactions.
-
-Components receive API and job-event behavior through `AppDependencies`; production code does not import testing
-fixtures. Direct `fetch` and `EventSource` usage is restricted to low-level API/event modules by lint rules.
-
-Phase 7A intentionally avoids Playwright and browser screenshot comparison. Browser media playback, responsive rendering,
-and visual equivalence remain manual smoke gates until Phase 7B adds dedicated browser coverage.
-
-## Phase 7A Frontend Application Boundary
-
-The web app now uses a small bootstrap in `apps/web/src/main.tsx`; it creates the browser API client, the browser job-event adapter, and renders the React application with injected dependencies. `App.tsx` is intentionally a thin top-level coordinator that chooses the active workflow view and renders the shared shell.
-
-Frontend API access is isolated under `apps/web/src/api/`. Feature components do not call `fetch`, construct mutation URLs, or create `EventSource` instances. API error parsing is centralized in `api-error.ts`, and media/download URL construction remains in `urls.ts`.
-
-Cross-feature orchestration lives in `apps/web/src/app/useVideoOptimizerApp.tsx`. It owns history/capability loading, active-video selection, upload/import workflows, job creation, job-event subscription, history cleanup, global errors, and state that genuinely spans multiple features. Static presets and initial settings live in `app-config.tsx`.
-
-Major visual workflows are separated into feature components:
-
-- `features/prepare`: upload/dropzone/source details/subtitle availability
-- `features/outputs`: current jobs, output cards, package panel
-- `features/custom`: preset selection, target-size controls, optimization settings form
-- `features/compare`: theatre comparison view plus synchronized playback hook
-- `features/captions`: subtitle theatre/editor
-- `features/poster`: poster lightbox
-
-Pure derivations remain in selector/presenter modules rather than being rebuilt inside views. Phase 7B should add browser E2E coverage and can continue reducing the controller by moving more feature-local workflows into feature hooks.
-
-## Browser Route Model
-
-The web app uses a tiny query-string route layer in `apps/web/src/app/routes.ts` and `useBrowserRoute.ts`; it does not
-add a router dependency. Routes use stable application IDs only, for example `?view=prepare&source=video-1`,
-`?view=results&source=video-1&output=job-1`, and
-`?view=compare&source=video-1&output=job-1&mode=wipe&layout=two`. Filenames, absolute paths, content hashes, and local
-storage locations must not be serialized into URLs.
-
-The top-level destinations are `new`, `library`, `prepare`, `results`, `custom`, and `compare`. `prepare` and `results`
-are two URL-addressable states of one source workspace, not separate global product areas. Prepare renders the full
-source player, poster controls, source details, recommendations, and any available inline Results section. Results
-renders a compact source summary plus a collapsed “Edit source / preparation options” disclosure before the completed
-output and package workspace, so users do not have to scroll through the full player to inspect finished files.
-
-The URL persists selected source, selected output, compare mode, compare layout, and visible compare versions. It
-intentionally does not persist playback position, volume, zoom, pan, fullscreen state, wipe position, or unsaved form
-controls. Upload and URL import navigate to Prepare for the new source. Selecting a history or recent source with
-completed outputs defaults to Results unless the current URL explicitly requested Prepare; sources without completed
-outputs default to Prepare. Media jobs request a Results reveal only after completed output data is available.
-Back/forward and refresh restore the routed source when it exists. Missing sources show a recoverable message while the
-invalid URL is scrubbed to Library; invalid selected outputs are replaced with the nearest valid completed output.
-
-## Phase 7B Frontend Workflow Hooks
-
-Phase 7B continues shrinking the app controller by moving cross-cutting workflow state into focused hooks:
-
-- `useActiveJobs` owns active job roles, variation selection, and history restoration into the active-job model.
-- `useJobSubscriptions` owns EventSource subscription replacement, terminal cleanup, and stale-closure-safe job updates.
-- `useWorkspaceModel` owns derived current-video jobs, output readiness, package candidates, package savings, and status
-  labels.
-- `useSourceWorkflow` owns upload, URL import, source rename, new-video reset, history-video restore, and preview-frame
-  capture transitions.
-- `useMediaJobWorkflow` owns optimization/sample/poster/subtitle/pair/mux job orchestration, cancellation, reveal, and
-  job-output rename execution.
-- `usePackageWorkflow` owns package selection toggles and package-job creation.
-- `useCaptionWorkflow` owns caption editor loading and saving.
-- `useCustomSettings` owns optimization preset state, codec/container normalization, estimates, recommendations, and
-  target-size shortcuts.
-- `usePosterLightbox` owns poster preview focus-adjacent state, Escape close, zoom, and pan.
-
-The remaining `useVideoOptimizerApp` hook is still the composition point that assembles dependencies and returns the
-controller shape consumed by feature components. It should stay behaviorally boring: wiring, not business rules.
-
-## Browser E2E Boundary
-
-Playwright lives under `e2e/` and runs against a production web build. Global setup starts the compiled API with isolated
-temporary storage and a Vite preview server on loopback-only ports. Route-mocked specs own deterministic browser UI,
-keyboard, accessibility, console, and failed-request checks. The `@real-stack` spec is intentionally narrow and uses a
-generated tiny video so CI proves the browser can drive upload, encode, downloads, and cleanup without depending on
-developer media files.
-
-Production frontend code must not import E2E fixtures; lint rules keep test support outside app source imports.
-
-## Phase UI-A Product Surface
-
-Phase UI-A keeps the local-first media workflows and API contracts intact while reshaping the browser app into a more
-polished desktop utility. The product surface is organized around the practical website-video workflow: add a source,
-prepare the recommended website package, inspect results, customize only when needed, edit captions, compare playback,
-and return to the Library for previous sources.
-
-The CSS entrypoint remains `apps/web/src/styles.css`, but it now imports focused stylesheet layers:
-
-- `tokens.css` owns semantic light/dark theme variables, spacing, radii, shadows, typography, motion, and legacy aliases.
-- `reset.css` and `foundations.css` own base document behavior, forms, focus, and typography.
-- `layout.css`, `components.css`, and `responsive.css` own the redesigned shell, reusable primitives, workflow panels,
-  and viewport adjustments.
-- `features.css` preserves feature-specific selectors from the earlier app so behavior-facing class names remain stable
-  while the broader visual system is extracted.
-
-Reusable UI primitives stay under `apps/web/src/components/ui`. Phase UI-A adds a decorative app mark, status badges,
-and a more semantic settings group fieldset while continuing to keep network behavior in the API client and job-event
-adapter. Components still receive controller actions from the app hooks rather than calling `fetch`, constructing API
-URLs, or opening `EventSource` directly.
-
-The design favors dark mode by default with a deliberate light mode, compact density, clear source/job hierarchy,
-visible progress, and responsive narrow layouts without horizontal overflow. Screenshot review is intentionally
-deterministic and manual: `npm run review:ui-screens` captures representative app states into `.tmp/ui-review/` without
-committing image artifacts or adding brittle pixel-diff gates.
+- shared runtime contracts for any new request/response shape
+- more video-core extraction for reusable media behavior
+- clearer API service composition where workflows continue growing
+- real FFmpeg integration tests for any new media path
+- CLI or MCP wrappers only after the local API remains stable

@@ -6,9 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -37,6 +41,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Production dependency audit
+        run: npm audit --omit=dev --audit-level=high
 
   media-integration:
     runs-on: ubuntu-latest
