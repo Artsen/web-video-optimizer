@@ -15,23 +15,21 @@ The intended balance is roughly 80% slate structure, 15% tonal elevation and bor
 
 ## Logo
 
-The mark is a compression-frame symbol: an outer video frame, three narrowing source bands, and a terminal output/play shape. It should suggest media reduction and website-ready delivery without resembling a generic clapperboard or AI sparkle.
+The approved mark is a fused WVO monogram. The W and V share overlapping geometry, while the O acts as the terminal output form. The chromatic cyan and ember edge separation is part of the artwork and should remain intact.
 
-Canonical app assets live in `apps/web/src/assets/brand/`. Documentation copies live in `docs/assets/brand/` so GitHub can render README imagery.
+Canonical app and documentation assets live in `apps/web/public/brand/` so the Vite app, favicon, README, and packaged static paths use the same source files.
 
 Logo variants:
 
-- `mark.svg`: spectral icon mark.
-- `mark-monochrome.svg`: one-color app mark.
-- `wordmark-dark.svg`: horizontal logo for dark backgrounds.
-- `wordmark-light.svg`: horizontal logo for light backgrounds.
-- `apps/web/public/favicon.svg`: favicon-compatible mark.
+- `WVO-logo-transparent.png`: dark letterform variant for light surfaces.
+- `WVO-logo-white-transparent.png`: white letterform variant for dark surfaces.
+- `WVO-favicon.png`: favicon derived from the approved monogram for small browser chrome.
 
 When the mark sits next to visible "Web Video Optimizer" text, it should be `aria-hidden` to avoid duplicate announcements. Use text alternatives for standalone documentation imagery.
 
-Clear space should be at least one quarter of the mark width on all sides. Minimum practical sizes are 16px for the favicon mark, 20px for navigation chrome, 32px for prominent UI placement, and 180px wide for the wordmark.
+Clear space should be at least one quarter of the visible monogram width on all sides. Minimum practical rendered widths are about 48px for mobile chrome, 54px for sidebar chrome, 72px for workspace headers, and 180px for documentation or marketing placement.
 
-Do not rotate, stretch, recolor outside the approved palette, add glow effects, place on low-contrast imagery, replace the compression bands, or use the spectral gradient as ordinary text fill.
+Do not rotate, stretch, recolor, recreate with text, add containers by default, remove or exaggerate the cyan/ember edges, place on busy media, or use the logo's chromatic treatment as ordinary interface decoration. The logo's cyan and ember edges do not redefine the product palette; the interface remains slate, iris, and ember.
 
 ## Palette
 

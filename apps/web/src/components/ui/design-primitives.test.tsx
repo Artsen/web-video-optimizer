@@ -9,6 +9,7 @@ describe("design primitives", () => {
     const { container } = render(<AppMark />);
 
     expect(container.querySelector(".app-mark")).toHaveAttribute("aria-hidden", "true");
+    expect(container.querySelector(".app-mark")).toHaveClass("default");
   });
 
   it("renders status badges with semantic text and tone classes", () => {
