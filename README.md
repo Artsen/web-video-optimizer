@@ -1,5 +1,10 @@
 # Web Video Optimizer
 
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/assets/brand/wordmark-light.svg">
+  <img src="docs/assets/brand/wordmark-dark.svg" alt="Web Video Optimizer" width="420">
+</picture>
+
 [![CI](https://github.com/Artsen/web-video-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/Artsen/web-video-optimizer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Node.js 20+](https://img.shields.io/badge/Node.js-20%2B-339933)
@@ -119,6 +124,7 @@ flowchart LR
 - [API reference](docs/api.md)
 - [Architecture](docs/architecture.md)
 - [Testing](docs/testing.md)
+- [Brand system](docs/brand-system.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
 ## Privacy And Security

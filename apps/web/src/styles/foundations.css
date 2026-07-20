@@ -7,7 +7,7 @@ body {
 }
 
 ::selection {
-  color: #03100d;
+  color: var(--color-primary-text);
   background: var(--color-primary);
 }
 

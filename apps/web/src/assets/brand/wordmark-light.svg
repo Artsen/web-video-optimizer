@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="420" height="88" viewBox="0 0 420 88" role="img" aria-labelledby="title">
+  <title id="title">Web Video Optimizer</title>
+  <defs>
+    <linearGradient id="spectral" x1="10" x2="70" y1="18" y2="70" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5f6fe5" />
+      <stop offset="0.54" stop-color="#765bc8" />
+      <stop offset="1" stop-color="#e66a3a" />
+    </linearGradient>
+  </defs>
+  <rect width="420" height="88" rx="18" fill="#f2f4f7" />
+  <path fill="url(#spectral)" d="M18 23.5C18 19.9 20.9 17 24.5 17h39c3.6 0 6.5 2.9 6.5 6.5v37c0 3.6-2.9 6.5-6.5 6.5h-39c-3.6 0-6.5-2.9-6.5-6.5v-37Z" />
+  <path fill="#fff" fill-opacity=".92" d="M28 30h23v7H28zM28 42h17v7H28zM28 54h11v6H28z" />
+  <path fill="#111722" d="M53 36v22l13-11-13-11Z" />
+  <text x="88" y="40" fill="#151b24" font-family="Segoe UI, system-ui, sans-serif" font-size="24" font-weight="650">Web Video Optimizer</text>
+  <text x="90" y="62" fill="#465366" font-family="Segoe UI, system-ui, sans-serif" font-size="13">Local media compression workspace</text>
+</svg>
