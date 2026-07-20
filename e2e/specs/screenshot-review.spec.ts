@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test";
 import { fallbackJob, installMockApi, modernJob } from "../fixtures/api-routes";
 
 if (process.env.UI_SCREENSHOT_REVIEW === "1") {
-  test("captures deterministic UI-A review screenshots", async ({ page, browser }) => {
+  test("captures deterministic UI-B brand review screenshots", async ({ page, browser }) => {
     const outputDir = path.join(process.cwd(), ".tmp", "ui-review");
     await mkdir(outputDir, { recursive: true });
 
@@ -24,8 +24,8 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
             position: relative;
             overflow: hidden;
             background:
-              linear-gradient(135deg, rgba(16, 163, 127, 0.22), transparent 42%),
-              linear-gradient(25deg, #1c3550 0 30%, #314f47 30% 54%, #6d6141 54% 70%, #222 70%);
+              linear-gradient(120deg, rgba(95, 111, 229, 0.24), transparent 38%),
+              linear-gradient(24deg, #0b1220 0 30%, #1c2440 30% 54%, #583d48 54% 68%, #101722 68%);
           }
           html[data-compare-fixture="visual"] .compare-media-stage::before {
             position: absolute;
@@ -33,7 +33,7 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
             border-radius: 18px;
             background:
               radial-gradient(circle at 28% 28%, rgba(255, 255, 255, 0.72) 0 5%, transparent 5.4%),
-              linear-gradient(145deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.02)),
+              linear-gradient(145deg, rgba(255, 255, 255, 0.17), rgba(242, 118, 63, 0.04)),
               repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.11) 0 1px, transparent 1px 46px);
             box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
             content: "";
@@ -64,11 +64,13 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Web Video Optimizer" })).toBeVisible();
     await capture("empty-dark-desktop");
+    await capture("empty-brand-field-dark");
     await capture("empty-compact-dark");
 
     await page.getByRole("button", { name: "Light Mode" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await capture("empty-light-desktop");
+    await capture("empty-brand-field-light");
     await capture("empty-compact-light");
 
     await page.getByLabel("Choose Video").setInputFiles({
@@ -88,6 +90,7 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
     await capture("source-player-controls-dark");
 
     await page.getByRole("button", { name: "Optimize For Website" }).click();
+    await capture("processing-progress-dark");
     await page.evaluate(
       (jobs) => {
         const emit = (window as unknown as { __emitJobEvent(urlPart: string, payload: unknown): void }).__emitJobEvent;
@@ -100,6 +103,7 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
     await expect(page.locator(".output-kind", { hasText: "MP4 fallback" })).toBeVisible();
     await capture("results-dark-desktop", page, false);
     await capture("results-selected-output-dark", page, false);
+    await capture("completed-success-dark", page, false);
     await page.reload();
     await expect(page).toHaveURL(/view=results/);
     await expect(page.getByRole("heading", { name: "Results" })).toBeVisible();
@@ -164,6 +168,7 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
     await expect(page.getByRole("heading", { name: "Library" })).toBeVisible();
     await capture("library-dark-desktop");
     await capture("storage-warning-dark");
+    await capture("warning-state-dark");
     await page.getByRole("button", { name: "Light Mode" }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
     await capture("library-light-desktop");
@@ -189,5 +194,41 @@ if (process.env.UI_SCREENSHOT_REVIEW === "1") {
       element.scrollTop = element.scrollHeight;
     });
     await capture("mobile-bottom-chrome-results", page, false);
+
+    const unreachablePage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    let apiReachable = false;
+    await installMockApi(unreachablePage);
+    await unreachablePage.route("**/api/**", async (route) => {
+      if (!apiReachable) {
+        await route.abort("failed");
+        return;
+      }
+      await route.fallback();
+    });
+    await unreachablePage.goto("/");
+    await expect(
+      unreachablePage.getByRole("alert").getByRole("heading", { name: "Cannot reach the local API" })
+    ).toBeVisible();
+    await capture("api-unreachable-dark-desktop", unreachablePage);
+    await unreachablePage.getByRole("button", { name: "Light Mode" }).click();
+    await expect(unreachablePage.locator("html")).toHaveAttribute("data-theme", "light");
+    await capture("api-unreachable-light-desktop", unreachablePage);
+    await unreachablePage.setViewportSize({ width: 390, height: 844 });
+    await capture("api-unreachable-mobile", unreachablePage);
+    apiReachable = true;
+    await unreachablePage.getByRole("button", { name: "Retry connection" }).click();
+    await expect(unreachablePage.getByRole("heading", { name: "Ready for a source video" })).toBeVisible();
+    await capture("retry-success-light-desktop", unreachablePage);
+    await unreachablePage.close();
+
+    const degradedPage = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await installMockApi(degradedPage);
+    await degradedPage.route("**/api/storage", async (route) => {
+      await route.fulfill({ status: 500, headers: { "content-type": "application/json" }, body: "{}" });
+    });
+    await degradedPage.goto("/");
+    await expect(degradedPage.getByRole("status")).toContainText("Storage status");
+    await capture("degraded-bootstrap-dark-desktop", degradedPage);
+    await degradedPage.close();
   });
 }

@@ -1,6 +1,6 @@
 .app-shell {
   grid-template-columns: var(--layout-sidebar-width) minmax(0, 1fr);
-  background: var(--color-workspace-bg);
+  background: var(--color-app-bg);
 }
 
 .workspace {
@@ -8,6 +8,7 @@
   max-width: 1280px;
   margin: 0 auto;
   padding: var(--space-5) var(--space-6) var(--space-9);
+  background: var(--color-workspace-bg);
 }
 
 .sidebar {
@@ -49,6 +50,7 @@
 }
 
 .sidebar-file {
+  position: relative;
   align-self: start;
   min-height: 46px;
   height: auto;
@@ -68,6 +70,7 @@
   color: var(--color-text-primary);
   background: var(--color-surface-selected);
   border-color: color-mix(in srgb, var(--color-primary) 26%, transparent);
+  box-shadow: inset 3px 0 0 var(--color-primary);
 }
 
 .sidebar-footer {
@@ -76,6 +79,7 @@
 }
 
 .topbar {
+  position: relative;
   align-items: center;
   margin-bottom: var(--space-4);
   padding: var(--space-3) 0;
@@ -84,6 +88,21 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.topbar::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-primary) 52%, transparent),
+    color-mix(in srgb, var(--color-ember) 18%, transparent),
+    transparent 70%
+  );
+  content: "";
 }
 
 .brand {

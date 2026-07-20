@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
+  <title id="title">Web Video Optimizer monochrome mark</title>
+  <desc id="desc">A one-color compression-frame mark with narrowing video bands and an output play shape.</desc>
+  <path fill="currentColor" d="M10 16.5C10 13.46 12.46 11 15.5 11h33C51.54 11 54 13.46 54 16.5v31C54 50.54 51.54 53 48.5 53h-33C12.46 53 10 50.54 10 47.5v-31Zm8 5.5v6h20v-6H18Zm0 10v6h15v-6H18Zm0 10v5h10v-5H18Zm21-14.8v19.6l12-9.8-12-9.8Z" />
+</svg>
