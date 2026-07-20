@@ -29,18 +29,6 @@ Preparing video for the web usually means juggling codec settings, fallback file
 
 ## Quick Start
 
-### Docker Compose
-
-Docker is the easiest way to run the app when Docker is available:
-
-```powershell
-git clone https://github.com/Artsen/web-video-optimizer.git
-cd web-video-optimizer
-docker compose up --build
-```
-
-Open <http://localhost:5173>. The API listens on <http://localhost:4000>, and media is stored in the Docker `video_data` volume.
-
 ### Local Node
 
 Local development needs Node.js 20 or newer and FFmpeg/FFprobe on PATH.
@@ -52,7 +40,29 @@ npm ci
 npm run dev
 ```
 
+Open <http://localhost:5173>. The API listens on <http://localhost:4000> and must remain running while the web interface is used.
+
 On Windows PowerShell, use `npm.cmd` if script execution policy blocks `npm.ps1`.
+
+The two-console workflow is still supported:
+
+```powershell
+npm run dev:api
+```
+
+```powershell
+npm run dev:web
+```
+
+### Docker Compose
+
+Docker is optional for ordinary local development. When Docker is available:
+
+```powershell
+docker compose up --build
+```
+
+Open <http://localhost:5173>. The API listens on <http://localhost:4000>, and media is stored in the Docker `video_data` volume. Docker validation for this project is performed by GitHub Actions on Ubuntu.
 
 See [Getting Started](docs/getting-started.md) for FFmpeg setup, LAN access, yt-dlp imports, and optional whisper.cpp captions.
 

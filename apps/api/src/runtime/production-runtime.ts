@@ -32,6 +32,7 @@ import { JobExecutionService } from "../services/job-execution-service.js";
 import { JobLifecycleService } from "../services/job-lifecycle-service.js";
 import { JobService } from "../services/job-service.js";
 import { PackageService } from "../services/package-service.js";
+import { ReadinessService } from "../services/readiness-service.js";
 import { ManifestStatePersistenceService } from "../services/state-persistence-service.js";
 import { VideoService } from "../services/video-service.js";
 import { StorageHousekeepingService } from "../storage/housekeeping-service.js";
@@ -139,6 +140,15 @@ export function createProductionRuntime(
     storage
   );
   const capabilitiesService = new CapabilitiesService(ffmpegCapabilitiesAdapter, whisperAdapter, videoDownloader);
+  let runtimeInitialized = false;
+  let manifestLoaded = false;
+  const readinessService = new ReadinessService({
+    getCapabilities: () => capabilitiesService.getCapabilities(),
+    commandRunner,
+    storagePolicy,
+    isRuntimeInitialized: () => runtimeInitialized,
+    isManifestLoaded: () => manifestLoaded
+  });
   const videoService = new VideoService(
     videoRepository,
     jobRepository,
@@ -236,11 +246,13 @@ export function createProductionRuntime(
       processRegistry.clear();
       await storage.initialize();
       const recovery = await statePersistence.load();
+      manifestLoaded = true;
       await videoService.mergeDuplicateVideos();
       await cleanupService.pruneOrphanFiles();
       if (dependencies.startHousekeeping !== false) housekeeping.start();
       await statePersistence.save();
       await statePersistence.flush();
+      runtimeInitialized = true;
       if (
         recovery.recoveredFromBackup ||
         recovery.canceledInterruptedJobs > 0 ||
@@ -252,6 +264,9 @@ export function createProductionRuntime(
     },
     async getCapabilities() {
       return capabilitiesService.getCapabilities();
+    },
+    async getReadiness() {
+      return readinessService.getReadiness();
     },
     async getStorageStatus() {
       return storagePolicy.getStatus();

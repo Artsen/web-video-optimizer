@@ -13,7 +13,10 @@ http://localhost:4000
 | Method | Path                | Purpose                                                    |
 | ------ | ------------------- | ---------------------------------------------------------- |
 | `GET`  | `/health`           | Returns API health.                                        |
+| `GET`  | `/ready`            | Returns redacted operational readiness for startup checks. |
 | `GET`  | `/api/capabilities` | Reports FFmpeg, whisper.cpp, and yt-dlp capability status. |
+
+`/health` is intentionally lightweight liveness. `/ready` reports required startup checks such as managed storage, manifest load state, FFmpeg/FFprobe availability, core encoding capabilities, and storage pressure without exposing local paths, executable paths, filenames, raw commands, or manifest content. Required failures return `503` with `state: "not_ready"`. Warnings such as low storage return `200` with `state: "degraded"`. Optional tools such as yt-dlp and whisper.cpp are reported separately and are not required for core readiness.
 
 ## Sources
 

@@ -52,9 +52,11 @@ FFmpeg and FFprobe are invoked from PATH.
 
 Docker Compose sets:
 
+- API `HOST=0.0.0.0`
 - API `PORT=4000`
+- API `ALLOW_LAN_ACCESS=true`
 - API `CORS_ORIGIN=http://localhost:5173`
 - API `STORAGE_ROOT=/app/data`
 - web `VITE_API_BASE_URL=http://localhost:4000`
 
-The `/app/data` path is backed by the `video_data` Docker volume.
+The `/app/data` path is backed by the `video_data` Docker volume. Docker uses non-loopback API binding only so the published host port can reach the API inside the container; local Node development defaults to loopback-only binding unless you explicitly enable LAN access.

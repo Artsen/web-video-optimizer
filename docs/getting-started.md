@@ -1,6 +1,6 @@
 # Getting Started
 
-Web Video Optimizer can run with Docker Compose or directly with Node.js. Docker is simplest when available; local Node is more convenient for active development.
+Web Video Optimizer can run directly with Node.js or with Docker Compose. Local Node is the recommended everyday workflow and does not require Docker.
 
 ## Requirements
 
@@ -11,24 +11,6 @@ Web Video Optimizer can run with Docker Compose or directly with Node.js. Docker
 - Optional: Docker Desktop
 - Optional: yt-dlp for YouTube imports
 - Optional: whisper.cpp for local caption generation
-
-## Docker Compose
-
-```powershell
-git clone https://github.com/Artsen/web-video-optimizer.git
-cd web-video-optimizer
-docker compose up --build
-```
-
-Open <http://localhost:5173>.
-
-The API listens on <http://localhost:4000>. Runtime media is stored in the Docker `video_data` volume. Stop the app with `Ctrl+C`, then run:
-
-```powershell
-docker compose down
-```
-
-Use `docker compose down -v` only when you intentionally want to remove the stored media volume.
 
 ## Local Node
 
@@ -46,7 +28,7 @@ Start both API and web:
 npm run dev
 ```
 
-Open <http://localhost:5173>.
+Open <http://localhost:5173>. The API runs at <http://localhost:4000> and must remain running while the web interface is used.
 
 If PowerShell blocks `npm.ps1`, use:
 
@@ -56,17 +38,43 @@ npm.cmd run dev
 
 ## Separate Dev Consoles
 
-You can also run the API and web app separately:
+You can also run the API and web app separately. This is useful when you want each service in its own terminal:
+
+Console 1:
 
 ```powershell
 npm run dev:api
 ```
+
+Console 2:
 
 ```powershell
 npm run dev:web
 ```
 
 The default API is <http://localhost:4000>. The default web app is <http://localhost:5173>.
+
+## Docker Compose
+
+Docker is optional for ordinary local development. The project validates Docker Compose startup in GitHub Actions on Ubuntu.
+
+```powershell
+git clone https://github.com/Artsen/web-video-optimizer.git
+cd web-video-optimizer
+docker compose up --build
+```
+
+Open <http://localhost:5173>.
+
+The API listens on <http://localhost:4000>. Runtime media is stored in the Docker `video_data` volume. Inside Docker, the API binds to `0.0.0.0` with `ALLOW_LAN_ACCESS=true` so the published host port can reach the container; ordinary local Node development still defaults to loopback-only API binding.
+
+Stop the app with `Ctrl+C`, then run:
+
+```powershell
+docker compose down
+```
+
+Use `docker compose down -v` only when you intentionally want to remove the stored media volume.
 
 ## FFmpeg
 

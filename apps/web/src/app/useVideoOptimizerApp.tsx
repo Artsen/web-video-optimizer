@@ -194,7 +194,14 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     document.title = title;
   }, [activeTab, activeView, missingSourceId, video]);
 
-  useAppBootstrap({ api, theme, setCapabilities, setHistory, setReady: setIsBootstrapped, setStorageStatus });
+  const { bootstrap, retryBootstrap } = useAppBootstrap({
+    api,
+    theme,
+    setCapabilities,
+    setHistory,
+    setReady: setIsBootstrapped,
+    setStorageStatus
+  });
 
   const applyRouteState = React.useCallback((route: AppRoute) => {
     setMissingSourceId(null);
@@ -586,7 +593,8 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
     let nextHistory: HistorySnapshot;
     try {
       nextHistory = await api.deleteHistory(videoIds, jobIds);
-    } catch {
+    } catch (deleteError) {
+      setError(getReadableApiError(deleteError));
       return;
     }
     setHistory(nextHistory);
@@ -638,6 +646,7 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       route: browserRoute.route,
       isBootstrapped,
       missingSourceId,
+      bootstrap,
       openLibraryRoute,
       openNewRoute,
       openRouteForSource,
@@ -645,6 +654,7 @@ export function useVideoOptimizerApp(dependencies: AppDependencies) {
       setActiveTab,
       setActiveView,
       startNewVideo,
+      retryBootstrap,
       toggleTheme: () => setTheme((current) => (current === "dark" ? "light" : "dark")),
       theme
     },

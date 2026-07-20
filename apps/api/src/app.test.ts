@@ -8,6 +8,7 @@ import {
   CapabilitiesSchema,
   HistorySnapshotSchema,
   JobDtoSchema,
+  ReadinessDtoSchema,
   StorageCleanupResultDtoSchema,
   StorageStatusDtoSchema,
   VideoRecordDtoSchema,
@@ -15,6 +16,7 @@ import {
   type HistorySnapshot,
   type JobDto,
   type OptimizationSettings,
+  type ReadinessDto,
   type StorageCleanupResultDto,
   type StorageStatusDto,
   type VideoMetadata,
@@ -138,6 +140,28 @@ class FakeRuntime implements ApiRuntime {
       whisperCpp: false,
       whisperModel: false,
       ytDlp: false
+    };
+  }
+
+  async getReadiness(): Promise<ReadinessDto> {
+    return {
+      state: "ready",
+      checks: {
+        runtimeInitialized: { ok: true, state: "ready", message: "API runtime initialized" },
+        storageAvailable: { ok: true, state: "ready", message: "Managed storage available" },
+        manifestLoaded: { ok: true, state: "ready", message: "Manifest state loaded" },
+        ffmpegAvailable: { ok: true, state: "ready", message: "FFmpeg available" },
+        ffprobeAvailable: { ok: true, state: "ready", message: "FFprobe available" },
+        h264Encoding: { ok: true, state: "ready", message: "H.264/AAC fallback encoding available" },
+        modernWebmAv1: { ok: true, state: "ready", message: "AV1/WebM with Opus available" },
+        storagePressure: { ok: true, state: "ready", message: "Storage pressure normal" }
+      },
+      optional: {
+        ytDlpAvailable: { ok: false, state: "degraded", message: "yt-dlp available" },
+        whisperCppAvailable: { ok: false, state: "degraded", message: "whisper.cpp executable available" },
+        whisperModelConfigured: { ok: false, state: "degraded", message: "whisper.cpp model configured" }
+      },
+      storage: { pressure: "normal" }
     };
   }
 
@@ -332,6 +356,36 @@ describe("public API response shapes", () => {
 
     CapabilitiesSchema.parse(response.body);
     noPrivateFields(response.body);
+  });
+
+  it("returns redacted readiness matching the shared schema", async () => {
+    const { app } = makeApp();
+    const response = await request(app).get("/ready").expect(200);
+
+    ReadinessDtoSchema.parse(response.body);
+    expect(response.body.state).toBe("ready");
+    noPrivateFields(response.body);
+    expect(JSON.stringify(response.body)).not.toContain("D:/");
+    expect(JSON.stringify(response.body)).not.toContain("C:\\");
+  });
+
+  it("returns 503 when readiness reports required failures", async () => {
+    class NotReadyRuntime extends FakeRuntime {
+      override async getReadiness(): Promise<ReadinessDto> {
+        return {
+          ...(await super.getReadiness()),
+          state: "not_ready",
+          checks: {
+            ...(await super.getReadiness()).checks,
+            ffmpegAvailable: { ok: false, state: "not_ready", message: "FFmpeg available" }
+          }
+        };
+      }
+    }
+    const { app } = makeApp(new NotReadyRuntime());
+
+    const response = await request(app).get("/ready").expect(503);
+    ReadinessDtoSchema.parse(response.body);
   });
 
   it("returns history matching the shared schema without private fields", async () => {
