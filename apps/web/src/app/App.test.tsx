@@ -107,6 +107,43 @@ describe("App behavior", () => {
     expect(api.getStorageStatus).toHaveBeenCalledTimes(1);
   });
 
+  it("shows an accessible startup panel when the API is unreachable", async () => {
+    const api = createApi({
+      getHistory: vi.fn().mockRejectedValue(new TypeError("Failed to fetch C:\\secret\\manifest.json")),
+      getCapabilities: vi.fn().mockRejectedValue(new TypeError("Failed to fetch D:\\tools\\ffmpeg.exe")),
+      getStorageStatus: vi.fn().mockRejectedValue(new TypeError("Failed to fetch"))
+    });
+    renderApp(api);
+
+    const alert = await screen.findByRole("alert");
+    expect(within(alert).getByRole("heading", { name: "Cannot reach the local API" })).toBeInTheDocument();
+    expect(within(alert).getByRole("button", { name: "Retry connection" })).toBeInTheDocument();
+    expect(within(alert).getByText("http://localhost:4000")).toBeInTheDocument();
+    expect(alert).not.toHaveTextContent("C:\\secret");
+    expect(alert).not.toHaveTextContent("D:\\tools");
+    expect(screen.queryByRole("heading", { name: "Ready for a source video" })).not.toBeInTheDocument();
+  });
+
+  it("keeps usable startup with a partial bootstrap warning and clears it after retry", async () => {
+    const user = userEvent.setup();
+    const api = createApi({
+      getStorageStatus: vi.fn().mockRejectedValueOnce(new Error("D:\\private\\data")).mockResolvedValue(storageStatus())
+    });
+    renderApp(api);
+
+    expect(await screen.findByRole("heading", { name: "Ready for a source video" })).toBeInTheDocument();
+    const warning = screen.getByRole("status");
+    expect(warning).toHaveTextContent("Storage status");
+    expect(warning).not.toHaveTextContent("D:\\private");
+
+    await user.click(within(warning).getByRole("button", { name: "Retry connection" }));
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(api.getHistory).toHaveBeenCalledTimes(2);
+    expect(api.getCapabilities).toHaveBeenCalledTimes(2);
+    expect(api.getStorageStatus).toHaveBeenCalledTimes(2);
+  });
+
   it("uploads a selected file, activates the source, and displays metadata", async () => {
     const user = userEvent.setup();
     const api = createApi();
@@ -238,6 +275,24 @@ describe("App behavior", () => {
     await user.click(screen.getByRole("menuitem", { name: "Delete source" }));
 
     expect(api.deleteHistory).toHaveBeenCalledWith(["history-video"], []);
+  });
+
+  it("surfaces history deletion failures", async () => {
+    const user = userEvent.setup();
+    const restored = { ...videoRecord({ id: "history-video", originalName: "archive.mp4" }), jobIds: [] };
+    const api = createApi({
+      getHistory: vi.fn().mockResolvedValue(historySnapshot({ videos: [restored], jobs: [] })),
+      deleteHistory: vi.fn().mockRejectedValue(new Error("Could not delete selected local files."))
+    });
+    renderApp(api);
+
+    await user.click(await screen.findByRole("button", { name: /archive.mp4/i }));
+    await user.click(screen.getAllByRole("button", { name: /^library$/i })[0]);
+    await user.click(screen.getByRole("button", { name: "Source row actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Delete source" }));
+
+    await waitFor(() => expect(api.deleteHistory).toHaveBeenCalledWith(["history-video"], []));
+    expect(await screen.findByText("Could not delete selected local files.")).toBeInTheDocument();
   });
 
   it("shows storage pressure, usage details, and temporary cleanup feedback", async () => {

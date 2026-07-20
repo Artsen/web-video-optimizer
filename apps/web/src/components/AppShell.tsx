@@ -30,6 +30,17 @@ export function AppShell({ controller, children }: { controller: VideoOptimizerA
       <section className="workspace">
         <WorkspaceHeader controller={controller} />
         {status.error && <div className="notice error global-error">{status.error}</div>}
+        {navigation.bootstrap.issues.length > 0 && !navigation.bootstrap.unreachable && (
+          <div className="notice warning global-error" role="status">
+            <span>
+              Some startup information could not be loaded:{" "}
+              {navigation.bootstrap.issues.map((issue) => issue.label).join(", ")}.
+            </span>
+            <button className="mini-button" type="button" onClick={navigation.retryBootstrap}>
+              Retry connection
+            </button>
+          </div>
+        )}
         {navigation.activeTab === "history" && <HistoryView controller={controller} />}
         {children}
       </section>

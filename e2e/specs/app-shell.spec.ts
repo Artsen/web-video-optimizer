@@ -37,3 +37,31 @@ test("loads the empty app, navigates, toggles theme, and passes an empty-state a
   expect(api.requests.map((request) => request.url)).toContain("/api/history");
   await assertNoBrowserErrors();
 });
+
+test("shows API-unreachable startup state and retries successfully", async ({ page }, testInfo) => {
+  const assertNoBrowserErrors = attachBrowserConsoleGate(page, testInfo, {
+    allowConsoleError: (text) => text === "Failed to load resource: net::ERR_FAILED",
+    allowRequestFailure: (text) => text.includes("http://127.0.0.1:4100/api/") && text.includes("net::ERR_FAILED")
+  });
+  let apiReachable = false;
+
+  await installMockApi(page);
+  await page.route("**/api/**", async (route) => {
+    if (!apiReachable) {
+      await route.abort("failed");
+      return;
+    }
+    await route.fallback();
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("alert").getByRole("heading", { name: "Cannot reach the local API" })).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText("http://127.0.0.1:4100");
+
+  apiReachable = true;
+  await page.getByRole("button", { name: "Retry connection" }).click();
+
+  await expect(page.getByRole("heading", { name: "Ready for a source video" })).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await assertNoBrowserErrors();
+});

@@ -3,4 +3,10 @@ dist
 build
 .git
 data
+.tmp
+coverage
+playwright-report
+test-results
+.env
+.env.*
 *.log

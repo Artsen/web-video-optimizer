@@ -524,6 +524,45 @@ progress::-webkit-progress-value {
   color: var(--color-text-secondary);
 }
 
+.startup-error-panel {
+  text-align: left;
+}
+
+.startup-details {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.startup-details div {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-3);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-card);
+  background: var(--color-surface-recessed);
+}
+
+.startup-details dt {
+  color: var(--color-text-subtle);
+  font: var(--font-metadata);
+}
+
+.startup-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  font: var(--font-body-compact);
+}
+
+.notice.global-error {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+}
+
 .route-state-actions {
   display: flex;
   flex-wrap: wrap;

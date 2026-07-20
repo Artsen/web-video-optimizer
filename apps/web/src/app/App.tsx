@@ -15,15 +15,23 @@ export function App({ dependencies }: { dependencies: AppDependencies }) {
     <AppShell controller={controller}>
       {navigation.activeTab === "workflow" && (
         <>
-          {!navigation.isBootstrapped && <RouteLoadingState />}
+          {navigation.bootstrap.unreachable && <ApiUnavailableState controller={controller} />}
+          {!navigation.bootstrap.unreachable && !navigation.isBootstrapped && <RouteLoadingState />}
           {navigation.missingSourceId && <MissingSourceState controller={controller} />}
-          {!navigation.missingSourceId &&
+          {!navigation.bootstrap.unreachable &&
+            !navigation.missingSourceId &&
             (navigation.activeView === "prepare" || navigation.activeView === "results") && (
               <SourceWorkspace controller={controller} />
             )}
-          {source.video && navigation.activeView === "custom" && <CustomView controller={controller} />}
-          {source.video && navigation.activeView === "compare" && <CompareView controller={controller} />}
-          {source.video && navigation.activeView === "captions" && <CaptionsView controller={controller} />}
+          {!navigation.bootstrap.unreachable && source.video && navigation.activeView === "custom" && (
+            <CustomView controller={controller} />
+          )}
+          {!navigation.bootstrap.unreachable && source.video && navigation.activeView === "compare" && (
+            <CompareView controller={controller} />
+          )}
+          {!navigation.bootstrap.unreachable && source.video && navigation.activeView === "captions" && (
+            <CaptionsView controller={controller} />
+          )}
         </>
       )}
     </AppShell>
@@ -37,6 +45,34 @@ function SourceWorkspace({ controller }: { controller: ReturnType<typeof useVide
       <PrepareView controller={controller} />
       {hasInlineResults && <OutputsView controller={controller} embedded />}
     </>
+  );
+}
+
+function ApiUnavailableState({ controller }: { controller: ReturnType<typeof useVideoOptimizerApp> }) {
+  const { apiBaseUrl, navigation } = controller;
+  return (
+    <section className="workflow-section route-state-panel startup-error-panel" role="alert" aria-live="assertive">
+      <h2>Cannot reach the local API</h2>
+      <p className="muted">
+        Web Video Optimizer could not connect to the API at the configured local address. Keep the API running while
+        using the web interface.
+      </p>
+      <dl className="startup-details">
+        <div>
+          <dt>Expected API URL</dt>
+          <dd>{apiBaseUrl}</dd>
+        </div>
+        <div>
+          <dt>Two-console fallback</dt>
+          <dd>Run npm run dev:api, then npm run dev:web in another console.</dd>
+        </div>
+      </dl>
+      <div className="actions">
+        <button className="button primary" type="button" onClick={navigation.retryBootstrap}>
+          Retry connection
+        </button>
+      </div>
+    </section>
   );
 }
 

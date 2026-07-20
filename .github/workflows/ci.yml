@@ -121,3 +121,67 @@ jobs:
             test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+  docker-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Print Docker versions
+        run: |
+          docker --version
+          docker compose version
+
+      - name: Build Docker stack
+        run: docker compose build --no-cache
+
+      - name: Start Docker stack
+        run: docker compose up -d
+
+      - name: Wait for healthy services
+        run: |
+          for attempt in {1..30}; do
+            api_status="$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q api)")"
+            web_status="$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q web)")"
+            echo "Attempt ${attempt}: api=${api_status} web=${web_status}"
+            if [ "${api_status}" = "healthy" ] && [ "${web_status}" = "healthy" ]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+
+      - name: Verify Docker endpoints
+        run: |
+          node - <<'NODE'
+          const checks = [
+            ["API health", "http://127.0.0.1:4000/health"],
+            ["API readiness", "http://127.0.0.1:4000/ready"],
+            ["Web root", "http://127.0.0.1:5173/"]
+          ];
+          for (const [label, url] of checks) {
+            const response = await fetch(url);
+            console.log(`${label}: ${response.status}`);
+            if (!response.ok) process.exit(1);
+          }
+          NODE
+
+      - name: Verify browser-facing API URL
+        run: |
+          docker compose exec -T web node -e "process.exit(process.env.VITE_API_BASE_URL === 'http://localhost:4000' ? 0 : 1)"
+
+      - name: Verify Docker services remain running
+        run: |
+          docker compose ps
+          test "$(docker compose ps --status running -q | wc -l)" -eq 2
+
+      - name: Docker logs
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Clean up Docker stack
+        if: always()
+        run: docker compose down -v --remove-orphans

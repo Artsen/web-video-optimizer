@@ -7,6 +7,7 @@ import type {
   VideoMetadata,
   VideoRecordDto,
   StorageCleanupResultDto,
+  ReadinessDto,
   StorageStatusDto
 } from "@local-video-optimizer/contracts";
 import type { OpenedStoredFile, StorageArea } from "../storage/storage-boundary.js";
@@ -32,6 +33,7 @@ export type CaptionPayload = {
 export interface ApiRuntime {
   initialize(): Promise<void>;
   getCapabilities(): Promise<Capabilities>;
+  getReadiness(): Promise<ReadinessDto>;
   getStorageStatus(): Promise<StorageStatusDto>;
   cleanupStorage(): Promise<StorageCleanupResultDto>;
   getHistory(): HistorySnapshot;

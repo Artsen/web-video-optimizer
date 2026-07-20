@@ -17,7 +17,7 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "npm run dev:api",
+    "dev": "node scripts/dev.mjs",
     "dev:api": "npm run build:packages && npm run dev --workspace apps/api",
     "dev:web": "npm run build:packages && npm run dev --workspace apps/web",
     "build:packages": "npm run build --workspace packages/contracts && npm run build --workspace packages/video-core",
@@ -26,8 +26,10 @@
     "format:check": "prettier --check .",
     "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
     "test": "npm run build:packages && npm run test --workspaces --if-present",
-    "test:run": "npm run build:packages && npm run test:run --workspaces --if-present",
-    "test:coverage": "npm run build:packages && npm run test:coverage --workspaces --if-present",
+    "test:scripts": "vitest run --environment node ./scripts/dev-processes.test.mjs",
+    "test:scripts:coverage": "vitest run --coverage --environment node --coverage.reportsDirectory coverage/scripts ./scripts/dev-processes.test.mjs",
+    "test:run": "npm run build:packages && npm run test:scripts && npm run test:run --workspaces --if-present",
+    "test:coverage": "npm run build:packages && npm run test:scripts:coverage && npm run test:coverage --workspaces --if-present",
     "test:integration:media": "npm run build && npm run test:integration:media --workspace apps/api",
     "test:e2e": "node e2e/support/run-playwright.mjs",
     "test:e2e:real": "node e2e/support/run-playwright.mjs --grep @real-stack",

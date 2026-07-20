@@ -14,7 +14,7 @@ flowchart LR
   API --> FFmpeg[FFmpeg / FFprobe]
   API --> Whisper[optional whisper.cpp]
   API --> YtDlp[optional yt-dlp]
-  Browser -->|localStorage route state| BrowserState[(Browser state)]
+  Browser -->|URL query parameters and History API| BrowserState[(Browser route state)]
 ```
 
 The API is intentionally local and unauthenticated. CORS defaults only allow the local development origins. LAN binding is available through explicit configuration and should be treated as trusted-network-only operation.
@@ -104,18 +104,24 @@ erDiagram
   VIDEO {
     string id
     string originalName
-    string storedFileName
-    number sizeBytes
+    string storedPath
+    string sourceHash
+    string uploadedAt
     object metadata
   }
   JOB {
     string id
     string videoId
-    string type
+    string kind
     string status
     number progress
+    string message
+    string outputPath
     string outputFileName
+    string sidecarPath
     string sidecarFileName
+    number outputSize
+    string ffmpegCommand
   }
 ```
 
@@ -138,7 +144,9 @@ FFprobe extracts metadata and subtitle-track status. FFmpeg handles optimization
 
 ## Frontend Model
 
-The web app has a small bootstrap in `main.tsx`, a production app factory, route helpers, feature-local hooks, and focused views for Prepare, Results, Compare, Library, Settings, captions, posters, and packages.
+Entity fields such as `storedPath`, `sourceHash`, `outputPath`, `sidecarPath`, and raw manifest content are API-private and are not returned through public DTOs. Public video and job DTOs expose safe IDs, display filenames, metadata, job state, output sizes, and command previews needed by the browser.
+
+The web app has a small bootstrap in `main.tsx`, a production app factory, route helpers, feature-local hooks, and focused views for Prepare, Results, Compare, Library, custom export settings, captions, posters, and packages.
 
 Prepare and Results are progressive states of the same source workspace:
 
