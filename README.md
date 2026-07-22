@@ -1,8 +1,8 @@
 # Web Video Optimizer
 
 <picture>
-  <source media="(prefers-color-scheme: light)" srcset="apps/web/public/brand/WVO-logo-transparent.png">
-  <img src="apps/web/public/brand/WVO-logo-white-transparent.png" alt="Web Video Optimizer" width="360">
+  <source media="(prefers-color-scheme: light)" srcset="apps/web/public/brand/WVO-logo-transparent.webp">
+  <img src="apps/web/public/brand/WVO-logo-white-transparent.webp" alt="Web Video Optimizer" width="360">
 </picture>
 
 [![CI](https://github.com/Artsen/web-video-optimizer/actions/workflows/ci.yml/badge.svg)](https://github.com/Artsen/web-video-optimizer/actions/workflows/ci.yml)

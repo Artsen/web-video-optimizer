@@ -1,5 +1,5 @@
-export const WVO_LOGO_TRANSPARENT_PATH = "/brand/WVO-logo-transparent.png";
-export const WVO_LOGO_WHITE_TRANSPARENT_PATH = "/brand/WVO-logo-white-transparent.png";
+export const WVO_LOGO_TRANSPARENT_PATH = "/brand/WVO-logo-transparent.webp";
+export const WVO_LOGO_WHITE_TRANSPARENT_PATH = "/brand/WVO-logo-white-transparent.webp";
 
 export function AppMark({ size = "default" }: { size?: "default" | "small" }) {
   return (

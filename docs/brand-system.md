@@ -21,8 +21,8 @@ Canonical app and documentation assets live in `apps/web/public/brand/` so the V
 
 Logo variants:
 
-- `WVO-logo-transparent.png`: dark letterform variant for light surfaces.
-- `WVO-logo-white-transparent.png`: white letterform variant for dark surfaces.
+- `WVO-logo-transparent.webp`: dark letterform variant for light surfaces.
+- `WVO-logo-white-transparent.webp`: white letterform variant for dark surfaces.
 - `WVO-favicon.png`: favicon derived from the approved monogram for small browser chrome.
 
 When the mark sits next to visible "Web Video Optimizer" text, it should be `aria-hidden` to avoid duplicate announcements. Use text alternatives for standalone documentation imagery.
