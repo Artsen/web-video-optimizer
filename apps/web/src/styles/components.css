@@ -1,4 +1,3 @@
-.app-mark,
 .brand-mark,
 .upload-icon,
 .preset-icon {
@@ -12,40 +11,31 @@
 }
 
 .app-mark {
-  width: 40px;
-  height: 40px;
+  display: block;
+  width: 86px;
+  height: auto;
   flex: 0 0 auto;
-  padding: 3px;
-  overflow: hidden;
-  background:
-    linear-gradient(var(--color-surface-recessed), var(--color-surface-recessed)) padding-box,
-    var(--gradient-brand-spectral) border-box;
-  border-color: transparent;
+  line-height: 0;
 }
 
 .app-mark.small {
-  width: 32px;
-  height: 32px;
-  padding: 2px;
+  width: 58px;
 }
 
-.app-mark-icon {
-  display: block;
+.app-mark-image {
+  display: none;
   width: 100%;
-  height: 100%;
+  height: auto;
+  object-fit: contain;
+  user-select: none;
 }
 
-.app-mark-frame {
-  fill: url("#app-mark-spectral");
+:root:not([data-theme="light"]) .app-mark-image-white {
+  display: block;
 }
 
-.app-mark-band {
-  fill: #ffffff;
-  fill-opacity: 0.92;
-}
-
-.app-mark-play {
-  fill: var(--color-ember-text);
+:root[data-theme="light"] .app-mark-image-dark {
+  display: block;
 }
 
 .upload-icon {
@@ -1199,8 +1189,7 @@ progress::-moz-progress-bar {
 }
 
 .source-topbar .app-mark {
-  width: 34px;
-  height: 34px;
+  width: 76px;
 }
 
 .source-topbar h1 {
@@ -2663,7 +2652,6 @@ progress::-moz-progress-bar {
 }
 
 @media (forced-colors: active) {
-  .app-mark,
   .upload-icon {
     forced-color-adjust: auto;
     color: CanvasText;
@@ -2671,10 +2659,8 @@ progress::-moz-progress-bar {
     border-color: ButtonBorder;
   }
 
-  .app-mark-frame,
-  .app-mark-band,
-  .app-mark-play {
-    fill: currentColor;
+  .app-mark-image {
+    forced-color-adjust: auto;
   }
 
   .dropzone.dropzone-empty::before,

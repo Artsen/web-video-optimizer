@@ -25,4 +25,4 @@ Review captures are full-page unless the Playwright screenshot suite names them 
 
 The current curated set balances dark workflow coverage, one light-theme result, Compare theatre, Custom Export density, and mobile bottom chrome. Add an empty-state screenshot only when it materially improves the README.
 
-Current curated set: 6 WebP files, 260,638 bytes total.
+Current curated set: 6 WebP files, 333,348 bytes total.

@@ -132,7 +132,7 @@ describe("App behavior", () => {
     renderApp(api);
 
     expect(await screen.findByRole("heading", { name: "Ready for a source video" })).toBeInTheDocument();
-    const warning = screen.getByRole("status");
+    const warning = await screen.findByRole("status");
     expect(warning).toHaveTextContent("Storage status");
     expect(warning).not.toHaveTextContent("D:\\private");
 

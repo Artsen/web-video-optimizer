@@ -115,9 +115,7 @@
 }
 
 .topbar .app-mark {
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-card);
+  width: 86px;
 }
 
 .topbar h1 {
