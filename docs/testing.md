@@ -50,7 +50,7 @@ Unit tests cover:
 
 - shared contract schemas
 - video-core helpers for filenames, encoding settings, FFmpeg arguments, metadata, and progress parsing
-- API config parsing, request validation, route behavior, repositories, services, storage boundaries, capacity policy, reservations, persistence, scheduler behavior, process handling, cleanup, packages, captions, and downloads
+- API config parsing, request validation, route behavior, repositories, services, storage boundaries, capacity policy, reservations, persistence, scheduler behavior, process handling, cleanup, website packages, captions, and downloads
 - frontend route state, API client behavior, job event wiring, feature derivations, component behavior, compare state, poster dialog accessibility, and upload workflows
 
 Unit tests use Vitest and should not require real media tools.
@@ -80,7 +80,8 @@ The compiled API media integration suite requires FFmpeg and FFprobe on PATH. It
 - poster generation
 - package creation
 - privacy of DTOs
-- cleanup and deletion
+- cleanup of temporary or partial files
+- deletion of selected durable data
 - timeout cleanup and later work acceptance
 - graceful shutdown and recovery states
 - scheduler FIFO behavior and cancelation paths

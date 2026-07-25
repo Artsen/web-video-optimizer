@@ -5,7 +5,7 @@ Web Video Optimizer is designed for local media processing.
 ## What Stays Local
 
 - Uploaded source videos are stored under the configured local `STORAGE_ROOT` or Docker volume.
-- Optimized outputs, posters, captions, packages, temporary files, and `manifest.json` stay in managed local storage.
+- Optimized outputs, posters, captions, website packages, temporary files, and `manifest.json` stay in managed local storage.
 - FFmpeg, FFprobe, and whisper.cpp processing runs on your machine when those tools are installed locally.
 - The app does not include analytics, telemetry, accounts, hosted storage, or remote video processing services.
 
@@ -17,7 +17,7 @@ The browser talks to the local API base URL you configure with `VITE_API_BASE_UR
 
 ## Local Storage And Deletion
 
-The Library and Results views can delete sources, jobs, and generated artifacts from managed storage. Storage cleanup removes stale temporary files. Docker users should remember that media persists in the `video_data` volume until it is deleted from the app or the volume is removed.
+The Library and Results views can delete sources, jobs, and outputs from managed storage. Storage cleanup removes stale temporary files. Docker users should remember that media persists in the `video_data` volume until the user deletes it from the app or removes the volume.
 
 ## Logs And Metadata
 

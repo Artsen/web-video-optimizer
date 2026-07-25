@@ -370,6 +370,8 @@ Disallowed examples:
 - `AI-powered optimization engine`
 - `Revolutionary media workflow`
 
+The brand document governs product voice and interface tone. [WVO Technical English](writing-style.md) governs procedural and technical documentation. The two standards are complementary: product and brand writing can explain design rationale, while setup, configuration, troubleshooting, API, and support documentation should use controlled terminology and direct procedures.
+
 ## Accessibility And Review
 
 Normal text should meet at least 4.5:1 contrast and large text at least 3:1. Status must not rely on color alone.

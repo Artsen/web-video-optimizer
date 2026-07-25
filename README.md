@@ -12,7 +12,7 @@
 
 Web Video Optimizer is a local-first browser workspace for turning source videos into website-ready media packages. It runs FFmpeg on your computer, creates compatible and modern video outputs, lets you compare visual quality, and packages video, poster, caption, transcript, embed, and structured-data assets for deployment.
 
-It is intended for web developers, content teams, marketers, and creators who need deployable web video assets without sending source media to a hosted conversion service. In the default local configuration, the browser sends media to the local WVO API process and the API keeps sources and generated files on your machine.
+It is intended for web developers, content teams, marketers, and creators who need deployable web video assets without sending source videos to a hosted conversion service. In the default local configuration, the browser sends media to the local WVO API process and the API keeps sources and generated files on your machine.
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="docs/assets/screenshots/results-light.webp">
@@ -374,7 +374,7 @@ See [Privacy](PRIVACY.md) and [Security](SECURITY.md).
 
 ## Current Limitations
 
-WVO is still a developer beta for trusted local or trusted LAN use. It has no accounts or cloud sync. FFmpeg and FFprobe are required for core media work; caption generation requires optional whisper.cpp and a local model; URL import requires optional yt-dlp and contacts the source service. Processing speed depends on source media, codec, settings, and hardware. Browser playback support may differ from encoding support. Docker Compose startup is validated in GitHub Actions on Ubuntu, but local platform behavior can still vary.
+WVO is still a developer beta for trusted local or trusted LAN use. It has no accounts or cloud sync. FFmpeg and FFprobe are required for core media work; caption generation requires optional whisper.cpp and a local model; URL import requires optional yt-dlp and contacts the source service. Processing speed depends on the source video, codec, settings, and hardware. Browser playback support may differ from encoding support. Docker Compose startup is validated in GitHub Actions on Ubuntu, but local platform behavior can still vary.
 
 ## Documentation Map
 
@@ -382,7 +382,7 @@ WVO is still a developer beta for trusted local or trusted LAN use. It has no ac
 
 **Operators:** [Configuration](docs/configuration.md), [Privacy](PRIVACY.md), and [Security](SECURITY.md).
 
-**Developers:** [Architecture](docs/architecture.md), [API Reference](docs/api.md), and [Testing](docs/testing.md).
+**Developers:** [Architecture](docs/architecture.md), [API Reference](docs/api.md), [Testing](docs/testing.md), and [WVO Technical English](docs/writing-style.md).
 
 **Project governance:** [Contributing](CONTRIBUTING.md), [Code of Conduct](CODE_OF_CONDUCT.md), [Changelog](CHANGELOG.md), and [Support](SUPPORT.md).
 

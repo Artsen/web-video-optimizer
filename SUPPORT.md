@@ -4,13 +4,13 @@ Web Video Optimizer is a developer-beta local tool. The fastest path to help is 
 
 ## Before Opening An Issue
 
-Check:
+Before you open an issue, check:
 
 - [Getting Started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
 - [Troubleshooting](docs/troubleshooting.md)
 
-Also confirm:
+Then confirm these commands:
 
 ```powershell
 node --version
@@ -23,21 +23,22 @@ ffprobe -version
 
 Include:
 
-- operating system
-- Node.js version
-- whether you are using Docker or local Node
-- whether FFmpeg/FFprobe are on PATH
-- relevant environment variables with private paths redacted
-- steps to reproduce
-- expected and actual behavior
-- browser console errors or API terminal output
-- whether the issue happens with a small test video
+- Operating system.
+- Node.js version.
+- Whether you use Docker or local Node.
+- Whether FFmpeg and FFprobe are on PATH.
+- Relevant environment variables with private paths redacted.
+- Steps to reproduce.
+- Expected result.
+- Actual result.
+- Browser console errors or API terminal output.
+- Whether the issue happens with a small test source video.
 
-Do not attach private media unless you are comfortable sharing it publicly.
+Do not attach a private source video unless you are comfortable sharing the source video publicly.
 
 ## Feature Requests
 
-Describe the workflow you are trying to improve, the current workaround, and what success would look like.
+Describe the workflow you want to improve, the current workaround, and the result that would make the workflow better.
 
 ## Security
 
