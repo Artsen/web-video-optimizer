@@ -1,6 +1,6 @@
 # Architecture
 
-Web Video Optimizer is a local-first web app with a React browser client, an Express API, shared runtime contracts, and FFmpeg-backed media workers. The system is designed around small service boundaries so video processing, storage cleanup, package generation, captions, and UI routing can evolve without changing the public API casually.
+Web Video Optimizer is a local-first web app with a React browser client, an Express API, shared runtime contracts, and FFmpeg-backed media workers. The system is designed around small service boundaries so video processing, storage cleanup, website package generation, captions, and UI routing can evolve without changing the public API casually.
 
 ## System Context
 
@@ -29,11 +29,11 @@ sequenceDiagram
   participant S as Storage
   participant F as FFmpeg/FFprobe
 
-  U->>W: Add source
+  U->>W: Add source video
   W->>A: POST /api/videos
   A->>S: Stage and admit upload
   A->>F: Probe metadata
-  A->>S: Persist source and manifest
+  A->>S: Persist source video and manifest
   A-->>W: Video record
   U->>W: Optimize for website
   W->>A: POST /api/videos/:id/pair
@@ -74,7 +74,7 @@ The `video-core` package holds pure logic that is useful on either side of the b
 - job lifecycle and scheduling services
 - process registry and process runner
 - storage boundary, reservations, capacity checks, and housekeeping
-- cleanup, package, caption, video, and job services
+- cleanup, website package, caption, video, and job services
 
 Routes depend on the runtime interface rather than constructing services directly. This keeps tests fast and lets integration tests run against the compiled API without changing route code.
 
@@ -128,11 +128,11 @@ erDiagram
 Managed storage lives under `STORAGE_ROOT`:
 
 - `uploads` stores admitted source videos.
-- `outputs` stores completed job artifacts and packages.
+- `outputs` stores completed job artifacts and website packages.
 - `tmp` stores temporary work files and upload staging.
 - `manifest.json` stores durable history.
 
-The storage boundary resolves files by managed area, blocks traversal, and opens files through descriptors. Cleanup removes canceled jobs, deleted videos, orphan files, stale temporary files, and partial failed outputs. Capacity checks can reserve bytes before paired website jobs so one output is not admitted unless the pair can be scheduled safely.
+The storage boundary resolves files by managed area, blocks traversal, and opens files through descriptors. Cleanup removes canceled jobs, deleted source videos, orphan files, stale temporary files, and partial failed outputs. Capacity checks can reserve bytes before paired website jobs so one output is not admitted unless the pair can be scheduled safely.
 
 ## Persistence And Recovery
 

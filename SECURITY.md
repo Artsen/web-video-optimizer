@@ -24,6 +24,6 @@ Include:
 
 ## Scope
 
-Useful reports include path traversal, unsafe file serving, upload admission bypasses, command execution issues, unsafe archive contents, CORS mistakes, dependency vulnerabilities with a working impact, and denial-of-service cases that bypass configured limits.
+Useful reports include path traversal, unsafe file serving, upload admission bypasses, command execution issues, unsafe ZIP contents, CORS mistakes, dependency vulnerabilities with a working impact, and denial-of-service cases that bypass configured limits.
 
 Reports about optional third-party tools such as FFmpeg, yt-dlp, or whisper.cpp may need to be reported upstream unless the issue is caused by how this app invokes them.

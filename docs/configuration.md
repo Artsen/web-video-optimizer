@@ -1,6 +1,33 @@
 # Configuration
 
-The API reads environment variables at startup. Restart the API after changing them. The web app reads `VITE_API_BASE_URL` when the Vite app starts or builds.
+The API reads environment variables at startup. Restart the API after changing an API variable. The web app reads `VITE_API_BASE_URL` when the Vite app starts or builds.
+
+## Change A Configuration Value
+
+### Purpose
+
+Change WVO runtime configuration for a local development session.
+
+### Before You Start
+
+- Stop the API when you change API variables.
+- Stop the Vite web app when you change `VITE_API_BASE_URL`.
+- Record values that contain private local paths outside public issues and pull requests.
+
+### Procedure
+
+1. Set the environment variable in the terminal that will start the process.
+2. Start or restart the affected process.
+3. Open <http://localhost:5173>.
+4. If the change affects API readiness, open <http://localhost:4000/ready>.
+
+### Result
+
+The affected process starts with the new value.
+
+### Recovery
+
+If WVO does not use the new value, confirm that the variable was set in the same terminal that started the process.
 
 ## Core
 
@@ -24,7 +51,9 @@ The API reads environment variables at startup. Restart the API after changing t
 | `TEMP_FILE_MAX_AGE_MS`         | `86400000`                                  | Age threshold for stale temporary cleanup.                                                         |
 | `HOUSEKEEPING_INTERVAL_MS`     | `3600000`                                   | Interval for background storage housekeeping.                                                      |
 
-Managed areas are `uploads`, `outputs`, `tmp`, and `tmp/upload-staging`. Files outside those areas are not served through the API.
+Managed areas are `uploads`, `outputs`, `tmp`, and `tmp/upload-staging`. The API does not serve files outside those areas.
+
+Important: Do not point `STORAGE_ROOT` at a directory that contains unrelated user files. Delete and cleanup actions operate inside managed storage.
 
 ## Media Jobs
 
@@ -47,6 +76,8 @@ Managed areas are `uploads`, `outputs`, `tmp`, and `tmp/upload-staging`. Files o
 | `WHISPER_CPP_MODEL` | unset                    | Path to a local whisper.cpp model file.        |
 
 FFmpeg and FFprobe are invoked from PATH.
+
+Result: If optional tools are not configured, WVO still supports local upload, probing, optimization, comparison, posters, packages, and downloads. YouTube import and caption generation remain unavailable until their variables are configured.
 
 ## Docker Compose
 

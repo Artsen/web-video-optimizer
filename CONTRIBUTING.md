@@ -57,6 +57,14 @@ If you changed UI presentation, run `npm run review:ui-screens` and review the i
 - Add or update tests close to the behavior being changed.
 - Avoid changing encoding defaults, API contracts, or routing behavior inside unrelated refactors.
 
+## Documentation Expectations
+
+- Use the controlled terminology in [WVO Technical English](docs/writing-style.md).
+- Preserve exact UI labels, commands, routes, filenames, environment variables, API fields, codec names, and error codes.
+- Check terminology when you add a new user-facing concept.
+- Add a glossary entry to `docs/writing-style.md` when a new concept needs a stable preferred term.
+- Do not claim formal ASD-STE100 compliance.
+
 ## Do Not Commit
 
 - `node_modules`

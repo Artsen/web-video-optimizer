@@ -20,4 +20,5 @@ Start here when you want the app to run, understand it, change it, or debug it.
 - [API Reference](api.md): local API endpoints and response behavior.
 - [Testing](testing.md): unit, coverage, browser E2E, real-media integration, and screenshot review commands.
 - [Brand System](brand-system.md): visual identity, palette, logo rules, interaction states, and screenshot asset guidance.
+- [WVO Technical English](writing-style.md): controlled terminology and procedural-writing standard for documentation.
 - [Contributing](../CONTRIBUTING.md): branch hygiene, review expectations, and files that must not be committed.

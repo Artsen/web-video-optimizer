@@ -18,7 +18,7 @@ http://localhost:4000
 
 `/health` is intentionally lightweight liveness. `/ready` reports required startup checks such as managed storage, manifest load state, FFmpeg/FFprobe availability, core encoding capabilities, and storage pressure without exposing local paths, executable paths, filenames, raw commands, or manifest content. Required failures return `503` with `state: "not_ready"`. Warnings such as low storage return `200` with `state: "degraded"`. Optional tools such as yt-dlp and whisper.cpp are reported separately and are not required for core readiness.
 
-## Sources
+## Source Videos
 
 | Method   | Path                       | Purpose                                                                     |
 | -------- | -------------------------- | --------------------------------------------------------------------------- |
@@ -27,7 +27,7 @@ http://localhost:4000
 | `GET`    | `/api/videos/:id/source`   | Stream the source video inline.                                             |
 | `GET`    | `/api/videos/:id/download` | Download the original source video.                                         |
 | `PATCH`  | `/api/videos/:id`          | Rename the source display filename. Body: `{ "originalName": "name.mp4" }`. |
-| `DELETE` | `/api/videos/:id`          | Delete a source and its associated managed files.                           |
+| `DELETE` | `/api/videos/:id`          | Delete a source video and its associated managed files.                     |
 
 ## Jobs
 
@@ -56,12 +56,12 @@ Preview endpoints support valid `Range` headers, including suffix ranges used by
 
 ## Captions
 
-| Method | Path                          | Purpose                                                                 |
-| ------ | ----------------------------- | ----------------------------------------------------------------------- |
-| `POST` | `/api/videos/:id/subtitles`   | Create a subtitle-generation job when whisper.cpp is configured.        |
-| `GET`  | `/api/jobs/:id/captions`      | Read generated caption text.                                            |
-| `PUT`  | `/api/jobs/:id/captions`      | Replace generated VTT captions. Body: `{ "vtt": "WEBVTT..." }`.         |
-| `POST` | `/api/jobs/:id/mux-subtitles` | Create a remux job that embeds subtitles into a completed video output. |
+| Method | Path                          | Purpose                                                                |
+| ------ | ----------------------------- | ---------------------------------------------------------------------- |
+| `POST` | `/api/videos/:id/subtitles`   | Create a caption-generation job when whisper.cpp is configured.        |
+| `GET`  | `/api/jobs/:id/captions`      | Read generated caption text.                                           |
+| `PUT`  | `/api/jobs/:id/captions`      | Replace generated VTT captions. Body: `{ "vtt": "WEBVTT..." }`.        |
+| `POST` | `/api/jobs/:id/mux-subtitles` | Create a remux job that embeds captions into a completed video output. |
 
 ## Packages
 
@@ -75,7 +75,7 @@ Package metadata supports optional `title`, `description`, `language`, and `file
 
 | Method | Path                   | Purpose                                       |
 | ------ | ---------------------- | --------------------------------------------- |
-| `GET`  | `/api/history`         | Return the persisted source/job snapshot.     |
+| `GET`  | `/api/history`         | Return the persisted local library snapshot.  |
 | `POST` | `/api/history/delete`  | Bulk-delete selected `videoIds` and `jobIds`. |
 | `GET`  | `/api/storage`         | Return managed storage status.                |
 | `POST` | `/api/storage/cleanup` | Remove stale temporary managed files.         |
