@@ -40,7 +40,7 @@ Processed historical sources open directly to Results. New or unprocessed source
 
 ![Compare theatre](assets/screenshots/compare-wipe-dark.webp)
 
-Compare is a theatre-style view for checking visual quality. It supports multiple layouts and modes, including side-by-side, stacked, overlay, and wipe comparison. Playback can be synchronized across videos.
+Compare is a theatre-style view for checking visual quality. It supports grid layouts, wipe comparison, and A/B comparison. Playback can be synchronized across videos.
 
 The URL restores selected output, mode, layout, and visible versions. Playback time, volume, zoom, pan, wipe position, and fullscreen are intentionally treated as temporary review state.
 
